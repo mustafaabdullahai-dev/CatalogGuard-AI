@@ -542,3 +542,110 @@ may happen to one.
   erasure obligations may eventually require a documented purge path. That is a
   separate decision, and it must be explicit rather than an accidental side
   effect of a cascade.
+
+
+---
+
+## D-014 — Authentication: Email and Password, Server-Side Sessions
+
+**Phase:** 8 — Authentication & Authorization
+**Date:** 2026-10-02
+**Status:** Decided
+
+### Decision
+
+Humans sign in with an email address and a password, verified against an
+Argon2id hash, and receive an **opaque session cookie**. The session lives in
+Postgres in `auth_sessions`; the cookie carries a 256-bit random token and only
+its SHA-256 digest is stored.
+
+- Argon2id at 64 MiB, 3 passes, 4 lanes (OWASP recommendation). Parameters are
+  recorded in each hash, so they can be raised later and rehashed on the owner's
+  next successful login instead of forcing a reset.
+- Minimum password length 12, no composition rules. See trade-offs.
+- Cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`.
+- CSRF protection on every state-changing API call, including login, using a
+  **signed** double-submit token.
+- Two independent login counters, in Postgres: per email and per client IP.
+- No HTTP route creates a user or grants a role. The first administrator is
+  created by `python -m app.cli.bootstrap`, which prompts for the password so it
+  never appears in shell history.
+
+### Reason
+
+**Why not Django.** The application is FastAPI on async SQLAlchemy. Mounting
+`django.contrib.auth` alongside it means two ORMs, two migration chains, two
+settings systems, and synchronous session lookups in the request path — all to
+obtain the same capability list. The user experience Django's auth provides is
+reproduced here in a few hundred lines with one dependency
+(`argon2-cffi`) and no second framework.
+
+**Why a server-side session rather than a JWT.** Revocation. This system's
+approval authority is the thing being protected, so a removed membership or a
+suspected stolen cookie must take effect immediately. A self-contained JWT stays
+valid until it expires regardless of what the server now believes, which makes
+"revoke this session" and "log out everywhere" inexpressible.
+
+**Why signed double-submit CSRF.** Plain double-submit compares a cookie against
+a header, which is only as strong as the cookie: an attacker who can set a
+cookie on the domain — a subdomain takeover, a sibling app on the same
+registrable domain — chooses both halves. Signing the nonce with a server secret
+means a forged cookie can never produce a matching header.
+
+**Why throttles live in Postgres.** A lockout is a security control, and Redis
+is a cache that can be evicted or flushed. Losing the counter must not hand an
+attacker a fresh budget of attempts.
+
+### Mandatory engineering rules
+
+1. **One response for every login failure.** Wrong password, unknown address,
+   disabled account: identical 401, identical body. The real reason is logged
+   server-side and never returned.
+2. **Hash the work regardless of whether the user exists.** An unknown address
+   must cost the same CPU as a known one, or response time enumerates accounts.
+3. **Normalize the address before anything else looks at it.** Otherwise
+   `Ops@example.com` is a separate lookup miss and a separate throttle budget.
+4. **Throttle before lookup**, and commit the counter on the failure path. A
+   failed attempt must outlive the request that recorded it.
+5. **Clear the throttle only on success.** Clearing on failure returns the budget
+   on every attempt, which is a counter that can never reach its limit.
+6. **The workspace header is a hint, not authority.** `X-Workspace-Id` is checked
+   against the caller's memberships; a workspace the user does not belong to is a
+   403, never a 404 (which would confirm existence).
+7. **A capability is never implied by another.** `write` does not imply `approve`
+   or `admin`, and `is_superuser` is not a bypass. The bootstrap account is
+   created with it False specifically so the role matrix is exercised from day
+   one.
+8. **CSRF is enforced before routing.** The middleware rejects on method, path,
+   and headers, so the guarantee does not depend on any handler remembering.
+
+### Trade-offs accepted
+
+- **No password reset, no email delivery.** Reset needs an outbound mail
+  provider, which is a dependency and a deliverability problem. Until one exists,
+  a lost password is resolved by an operator with database access re-running the
+  bootstrap CLI. Recorded as a gap rather than silently omitted.
+- **No SSO or MFA.** Both are deferred. MFA is the obvious next addition and
+  attaches to the session record rather than to the password path.
+- **Every authenticated request costs one indexed lookup** for the session and
+  one for the membership list. Caching either re-introduces the revocation
+  problem D-014 was chosen to solve.
+- **No composition rules.** A 12-character floor with no character-class
+  requirement is weaker against naive cracking than a complex rule, but complex
+  rules reliably produce `Password1!`. Argon2's cost is what actually buys
+  resistance here.
+- **Users cannot self-serve.** Onboarding a second user needs an operator. For
+  MVP teams that is acceptable; it is the first thing to change.
+
+### Alternatives rejected
+
+- **Django's auth stack.** A second ORM, a second migration chain, and sync
+  session lookups in an async request path, for a capability list.
+- **JWT in a cookie or in `localStorage`.** Not revocable; `localStorage` is
+  readable by any injected script.
+- **Passwordless magic link.** Depends entirely on an email provider before
+  anything can be tested end to end, and gives no credential for an operator
+  running the bootstrap CLI.
+- **Redis-backed throttles.** An evictable cache guarding a security control.
+- **`X-Forwarded-For` as the throttle key.** Client-controlled unless a trusted
+  proxy is in front; it would let a caller mint a fresh budget per request.

@@ -18,8 +18,10 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -29,6 +31,7 @@ from app.db.base import (
     Base,
     SoftDeletableEntity,
     TenantEntity,
+    new_uuid,
     str_enum,
 )
 
@@ -108,7 +111,9 @@ class Organization(Base):
 
     __tablename__ = "organizations"
 
-    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=new_uuid
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -170,7 +175,9 @@ class User(Base):
 
     __tablename__ = "users"
 
-    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=new_uuid
+    )
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -215,4 +222,95 @@ class WorkspaceMembership(TenantEntity):
     __table_args__ = (
         Index("uq_memberships_workspace_user", "workspace_id", "user_id", unique=True),
         {"comment": "Per-workspace role assignment"},
+    )
+
+class AuthSession(Base):
+    """A server-side login session (D-014).
+
+    Global rather than tenant-scoped: a session outlives any single workspace,
+    and it must be revocable without reference to one. The `users` table is
+    global for the same reason.
+
+    The cookie carries an opaque token; only its SHA-256 digest is stored. A
+    database disclosure therefore does not yield usable session cookies, and a
+    token can be revoked by deleting one row.
+    """
+
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=new_uuid
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    # hex digest of the cookie token, never the token itself.
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    # Rotated on privilege change: a password reset or a revoked role must not
+    # leave existing cookies working.
+    password_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Recorded for the security log: a session that appears from a new network
+    # or user agent is worth noticing.
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    user: Mapped[User] = relationship()
+
+    __table_args__ = (
+        Index("ix_auth_sessions_user_id", "user_id"),
+        # The only query that matters in the hot path: resolve a token.
+        Index("ix_auth_sessions_expires_at", "expires_at"),
+        {"comment": "Server-side login sessions; stores token digests only"},
+    )
+
+
+class LoginThrottle(Base):
+    """Failed-login counter (D-014).
+
+    Two scopes, one table, distinguished by `scope`:
+
+      - `email` counts attempts against one account, defeating guessing.
+      - `ip` counts attempts from one address across accounts, defeating a spray.
+
+    Global, not tenant-scoped: a throttle must apply to someone who has not yet
+    established which workspace they belong to.
+    """
+
+    __tablename__ = "login_throttles"
+
+    id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=new_uuid
+    )
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Lower-cased email or client IP. Stored hashed for the email scope, since
+    # an address is personal data with no reason to sit in plaintext here.
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    window_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("scope", "key", name="uq_login_throttles_scope_key"),
+        {"comment": "Failed-login counters for account and IP scopes"},
     )

@@ -224,6 +224,11 @@ class TenantContext:
         organization_id: uuid.UUID | None = None,
         user_id: uuid.UUID | None = None,
     ) -> None:
+        # A context without a tenant is the exact state every layer here exists
+        # to prevent, so it is rejected at construction rather than allowed to
+        # travel until it produces a query with no predicate on it.
+        if workspace_id is None:
+            raise ValueError("TenantContext requires a workspace_id")
         self.workspace_id = workspace_id
         self.organization_id = organization_id
         self.user_id = user_id

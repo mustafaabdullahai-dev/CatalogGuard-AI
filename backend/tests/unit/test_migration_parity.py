@@ -16,16 +16,20 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
 from sqlalchemy import CheckConstraint, UniqueConstraint
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import Mapper
 from sqlalchemy.schema import CreateTable
 
 import app.models  # noqa: F401  registers tables on Base.metadata
 from app.db.base import TENANT_KEY_COLUMNS, Base
 from app.db.rls import GLOBAL_TABLES, create_policy_sql
+
+_MAPPERS = sorted(Base.registry.mappers, key=lambda m: m.class_.__name__)
 
 MIGRATION = (
     Path(__file__).resolve().parents[2]
@@ -378,3 +382,33 @@ class TestIndexParity:
             if not indexed:
                 unindexed.append(name)
         assert not unindexed, f"workspace_id not indexed on: {unindexed}"
+
+
+class TestPrimaryKeysAreSelfAssigning:
+    """A table whose primary key needs the caller to invent an id is a trap.
+
+    Ids are generated in Python (`default=new_uuid`), so the symptom is not a
+    column error but a NOT NULL violation on the first real INSERT — which needs
+    a database to observe. Checking the default is wired catches it offline.
+    """
+
+    @pytest.mark.parametrize("mapper", _MAPPERS, ids=lambda m: m.class_.__name__)
+    def test_primary_key_is_generated(self, mapper: Mapper) -> None:
+        for column in mapper.local_table.primary_key.columns:
+            assert column.default is not None or column.server_default is not None, (
+                f"{mapper.local_table.name}.{column.name} has no default and no "
+                "server_default; every INSERT would have to supply it by hand"
+            )
+
+    @pytest.mark.parametrize("mapper", _MAPPERS, ids=lambda m: m.class_.__name__)
+    def test_python_default_yields_a_fresh_uuid(self, mapper: Mapper) -> None:
+        """Distinct ids, of the right type, from the generator itself."""
+        produced = []
+        for column in mapper.local_table.primary_key.columns:
+            default = column.default
+            if default is None or not default.is_callable:
+                continue
+            value = default.arg(None)
+            assert isinstance(value, uuid.UUID)
+            produced.append(value)
+        assert len(produced) == len(set(produced))

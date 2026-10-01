@@ -184,6 +184,50 @@ model change without a regeneration fails the test suite. RLS policies are
 derived from the metadata at migration time rather than listed by hand, which
 means a newly added tenant table is protected by default.
 
+### Authentication (D-014)
+
+```
+POST /auth/login ──► throttle check ──► user lookup ──► Argon2id verify
+                              │             │                │
+                              │             │                └─► rehash if cost changed
+                              │             └─► dummy verify if no such user
+                              └─► commit counter on failure, always
+
+       success ──► create auth_sessions row ──► Set-Cookie: cg_session (HttpOnly, Secure, Lax)
+```
+
+Three properties are worth stating explicitly, because each is a place where the
+obvious implementation leaks:
+
+- **Every failure is the same 401.** Wrong password, unknown address, disabled
+  account: identical status and body. The reason is logged server-side.
+- **Hashing happens regardless.** An unknown address runs a dummy verification so
+  it costs the same CPU as a known one. Without it, latency enumerates who has
+  an account.
+- **Throttle before lookup, and commit on failure.** The login route uses a
+  session with no automatic commit and commits explicitly on the failure path;
+  a rolled-back counter is a counter that never counts.
+
+Sessions are rows in `auth_sessions`, keyed by the SHA-256 digest of a 256-bit
+token. Two expiries: 12 hours idle, 14 days absolute. Both revocation ("log out
+everywhere") and scoped revocation ("keep this device") are expressible, which
+is the reason for a server-side session over a JWT.
+
+CSRF is a signed double-submit token. The cookie holds `nonce.hmac`, and the
+header must carry the identical value. Signing is what stops an attacker who can
+plant a cookie — via a subdomain, say — from choosing both halves.
+
+Identity and tenancy are separate dependencies. `get_auth_context` answers "who
+is this" and touches only global tables, so `/auth/me` works before a workspace
+has been chosen. `get_current_tenant` answers "which workspace, and may they act
+there": it checks `X-Workspace-Id` against the caller's memberships, refuses with
+403 rather than 404, and binds `app.current_workspace` for RLS before the handler
+runs.
+
+There is no HTTP route that creates a user or grants a role.
+`python -m app.cli.bootstrap` is the only way in, which is what "no route to an
+identity" means in practice.
+
 ---
 
 ## Roles (D-003, D-004)
@@ -236,6 +280,18 @@ marketplace listings. Telemetry must not leave our infrastructure.
 - **No RLS bypass role.** Cross-tenant migration and admin tooling must bind a
   tenant explicitly today. A separately privileged role is a deliberate future
   decision, not an oversight.
+- **No password reset and no self-service onboarding.** Both need an outbound
+  email provider. Until one exists, a lost password is resolved by an operator
+  with database access. Recorded in D-014 rather than quietly deferred.
+- **No MFA or SSO.** The natural next additions; both attach to the session
+  record rather than to the password path.
+- **Every authenticated request does two indexed lookups** — session, then
+  memberships. Caching either re-introduces the revocation problem D-014 was
+  chosen to solve.
+- **Auth is unit-tested, not integration-tested.** There is no database, so the
+  sign-in path has never run against real SQL. The password hashing, session
+  arithmetic, CSRF middleware, and authorization matrix are covered; the actual
+  queries are not.
 - **Authentication is not built yet.** Nothing binds a tenant in production, so
   RLS currently denies every tenant query. This is the intended order: the
   policy ships before the identity layer that satisfies it.

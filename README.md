@@ -9,8 +9,8 @@ simulates. Humans approve. Connectors execute. Logs remember.
 
 ## Current status
 
-**Phase 7: data and persistence.** The schema, tenant isolation, and migration
-tooling are complete. Catalog domain logic has not been written yet.
+**Phase 8: authentication and authorization.** Schema, tenant isolation, and
+sign-in are complete. Catalog domain logic has not been written yet.
 
 | Component | State |
 |---|---|
@@ -18,7 +18,10 @@ tooling are complete. Catalog domain logic has not been written yet.
 | Python 3.13 venv + pinned dependencies | Installed |
 | Settings, logging, edge masking | Implemented, unit tested |
 | FastAPI app shell, `/health`, `/ready`, OpenAPI | Unit tested in-process |
-| ORM: 28 tables across tenancy, catalog, reconciliation, platform, compliance | Implemented, 212 tests |
+| ORM: 30 tables across tenancy, catalog, reconciliation, platform, compliance | Implemented, 325 tests |
+| Email/password sign-in, Argon2id, server-side sessions (D-014) | Implemented, unit tested |
+| RBAC guards and tenant binding wired to the session | Implemented, unit tested |
+| CSRF (signed double-submit) and security headers | Implemented, in-process tested |
 | Tenant isolation: composite FKs, tenant-scoped repository, RLS policies (D-011) | Implemented, unit tested |
 | Append-only audit logs enforced by trigger (D-013) | Implemented, unit tested |
 | Initial migration, generated from ORM metadata | Offline SQL verified |
@@ -26,6 +29,9 @@ tooling are complete. Catalog domain logic has not been written yet.
 | Redis (Upstash) | **Verified live** — Redis 8.4.0, TLS required |
 | LLM (Qroq) | Not wired; needs a rotated API key |
 | Catalog domain, agents, frontend | Not started |
+
+Users cannot self-register. The first administrator is created by a CLI, and
+there is no password reset yet — both are deliberate gaps, recorded in D-014.
 
 The migration has never been applied to a live database. It has been rendered
 to SQL in both directions and asserted against the ORM, which catches drift and
@@ -137,6 +143,42 @@ async with tenant_scope(workspace_id) as session:  # bound for this transaction
     ...
 ```
 
+### Authentication (D-014)
+
+Email and password against an Argon2id hash, exchanged for an opaque session
+cookie. The session lives in Postgres so it can be revoked; the cookie carries
+only a random token, of which the database stores the SHA-256 digest.
+
+Bootstrap the first administrator:
+
+```bash
+cd backend
+python -m app.cli.bootstrap --email you@example.com
+# password is prompted, never passed as an argument
+```
+
+Then, from a client:
+
+1. `GET /api/v1/auth/csrf` — receive the token and its cookie.
+2. `POST /api/v1/auth/login` with that token in `X-CSRF-Token`.
+3. `GET /api/v1/auth/me` — identity plus the workspaces you may act in.
+4. Send `X-Workspace-Id` on tenant-scoped requests; the server checks it against
+   your memberships and binds the tenant for RLS.
+
+```python
+from app.api.deps import get_current_tenant, require_approval_authority
+
+@app.get("/proposals")
+async def proposals(
+    scope: TenantScope = Depends(require_approval_authority),
+) -> ...:
+    ...
+```
+
+`X-Workspace-Id` is a hint, not authority: a workspace you do not belong to is a
+403. Capability checks read from one matrix (`RoleCapabilities`), and the
+integration role can never approve.
+
 ---
 
 ## Environment variables
@@ -169,6 +211,13 @@ failure would otherwise appear deep inside a worker rather than at startup.
 - **Audit logs are immutable in the database** (D-013). A trigger rejects
   `UPDATE` and `DELETE` for every role, so the trail cannot be edited even by
   the application.
+- **Sessions are revocable** (D-014). Server-side sessions, not JWTs, so a
+  removed membership or a stolen cookie takes effect immediately.
+- **Every login failure looks identical** (D-014). Same status, same body, and
+  the same hashing cost whether or not the address exists, so responses cannot
+  be used to enumerate accounts.
+- **Login attempts are throttled twice** (D-014) — per account and per IP —
+  because neither alone stops guessing and account spraying.
 
 ---
 
@@ -181,7 +230,8 @@ Current entries: UI/UX direction (D-001), source authority (D-002), personas and
 approval authority (D-003), the integration-admin role (D-004), MVP scope (D-005),
 vector store (D-006), LLM provider (D-007), job queue (D-008), database hosting
 (D-009), observability (D-010), tenant isolation (D-011), soft deletion and
-version history (D-012), and append-only audit logs (D-013).
+version history (D-012), append-only audit logs (D-013), and authentication
+(D-014).
 
 ---
 

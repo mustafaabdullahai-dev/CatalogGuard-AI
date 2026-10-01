@@ -393,6 +393,29 @@ def upgrade() -> None:
     op.create_index("ix_llm_usage_workspace_model", "llm_usage", ["workspace_id", "model"])
 
     # --------------------------------------------------------------------
+    # login_throttles
+    # Failed-login counters for account and IP scopes
+    # --------------------------------------------------------------------
+    op.create_table(
+        "login_throttles",
+        sa.Column("id", sa.UUID(), nullable=False),
+        sa.Column("scope", sa.String(length=16), nullable=False),
+        sa.Column("key", sa.String(length=64), nullable=False),
+        sa.Column("failures", sa.Integer(), nullable=False),
+        sa.Column("window_started_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("locked_until", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_login_throttles")),
+        sa.UniqueConstraint("scope", "key", name="uq_login_throttles_scope_key"),
+        comment="Failed-login counters for account and IP scopes",
+    )
+
+    # --------------------------------------------------------------------
     # marketplace_connections
     # Marketplace credentials; encrypted at rest, never plaintext
     # --------------------------------------------------------------------
@@ -515,6 +538,41 @@ def upgrade() -> None:
     )
 
     op.create_index("ix_users_deleted_at", "users", ["deleted_at"])
+
+    # --------------------------------------------------------------------
+    # auth_sessions
+    # Server-side login sessions; stores token digests only
+    # --------------------------------------------------------------------
+    op.create_table(
+        "auth_sessions",
+        sa.Column("id", sa.UUID(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
+        sa.Column("token_hash", sa.String(length=64), nullable=False),
+        sa.Column("password_changed_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("user_agent", sa.String(length=512), nullable=True),
+        sa.Column("ip_address", sa.String(length=45), nullable=True),
+        sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_id"],
+            ["users.id"],
+            name=op.f("fk_auth_sessions_user_id_users"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_auth_sessions")),
+        sa.UniqueConstraint("token_hash", name=op.f("uq_auth_sessions_token_hash")),
+        comment="Server-side login sessions; stores token digests only",
+    )
+
+    op.create_index("ix_auth_sessions_expires_at", "auth_sessions", ["expires_at"])
+    op.create_index("ix_auth_sessions_user_id", "auth_sessions", ["user_id"])
 
     # --------------------------------------------------------------------
     # compliance_chunks
@@ -1673,9 +1731,11 @@ def downgrade() -> None:
         "products",
         "health_scores",
         "compliance_chunks",
+        "auth_sessions",
         "users",
         "organizations",
         "marketplace_connections",
+        "login_throttles",
         "llm_usage",
         "compliance_documents",
         "catalogs",

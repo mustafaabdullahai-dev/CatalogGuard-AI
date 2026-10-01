@@ -214,7 +214,15 @@ class TestSchemaLevelIsolation:
         assert "deleted_at" not in columns
 
     def test_every_tenant_table_has_workspace_id(self) -> None:
-        exempt = {"organizations", "users", "workspaces", "workspace_memberships"}
+        # Identity and session tables sit at or outside the boundary: a user
+        # belongs to several workspaces and a session outlives any one of them.
+        exempt = {
+            "organizations",
+            "users",
+            "workspaces",
+            "auth_sessions",
+            "login_throttles",
+        }
         missing = [
             name
             for name, table in Base.metadata.tables.items()
@@ -306,6 +314,6 @@ class TestTenantKeyConstraintExists:
 
 def test_metadata_is_internally_consistent() -> None:
     """Guards against an accidentally broken metadata configuration."""
-    assert len(Base.metadata.tables) == 28
+    assert len(Base.metadata.tables) == 30
     names = [t.name for t in Base.metadata.tables.values()]
     assert len(names) == len(set(names))

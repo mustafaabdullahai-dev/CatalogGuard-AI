@@ -60,6 +60,39 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = 60
     jwt_refresh_token_expire_days: int = 30
     encryption_key: str = Field(..., description="Fernet key for credential encryption")
+
+    # Authentication (D-014)
+    # Session cookies, not JWTs. The session lives in Postgres so it can be
+    # revoked, which matters when approval authority is the thing being
+    # protected. The JWT settings above remain for future machine-to-machine
+    # tokens between the API and workers.
+    session_cookie_name: str = "cg_session"
+    csrf_cookie_name: str = "cg_csrf"
+    csrf_header_name: str = "X-CSRF-Token"
+    session_idle_timeout_minutes: int = 720
+    session_absolute_timeout_hours: int = 336
+    session_cookie_secure: bool = True
+    session_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+
+    # Argon2id. Defaults follow the OWASP password-storage recommendation
+    # (64 MiB, 3 passes, 4 lanes) and are recorded in every hash, so raising
+    # them later rehashes on each user's next successful login instead of
+    # invalidating anyone's password.
+    argon2_time_cost: int = 3
+    argon2_memory_cost_kib: int = 65536
+    argon2_parallelism: int = 4
+    argon2_hash_len: int = 32
+    argon2_salt_len: int = 16
+
+    # Login throttling. Two independent counters so neither a targeted attempt
+    # on one account nor a spray across many accounts gets a free run.
+    login_max_failures: int = 5
+    login_window_minutes: int = 15
+    login_lockout_minutes: int = 15
+    login_ip_max_failures: int = 20
+
+    # Passwords
+    password_min_length: int = 12
     # NoDecode: pydantic-settings JSON-decodes complex fields from .env by
     # default, which rejects plain comma-separated values. Disabling that
     # lets the _split_csv validator below handle the raw string.
@@ -170,6 +203,16 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def cookie_secure(self) -> bool:
+        """`Secure` on the session cookie, always in production.
+
+        Configuration can relax this for local HTTP development; it must not be
+        relaxable in production, where a session cookie sent over plaintext is
+        a stolen session.
+        """
+        return self.session_cookie_secure or self.is_production
 
     @property
     def mask_key_set(self) -> frozenset[str]:

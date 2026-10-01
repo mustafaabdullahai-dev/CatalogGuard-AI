@@ -126,6 +126,32 @@ async def tenant_scope(
         yield session
 
 
+@asynccontextmanager
+async def manual_session() -> AsyncGenerator[AsyncSession, None]:
+    """Session with no automatic commit.
+
+    For flows that must persist something on the failure path. Sign-in is the
+    example: a wrong password still has to increment the throttle counters, so
+    the failure cannot be allowed to roll the transaction back.
+    """
+    session = get_session_factory()()
+    try:
+        yield session
+    finally:
+        await session.close()
+
+
+async def get_session_no_commit() -> AsyncGenerator[AsyncSession, None]:
+    """FastAPI dependency wrapping `manual_session`.
+
+    A generator function rather than the context manager itself, because
+    FastAPI inspects the dependency for `yield` and an `@asynccontextmanager`
+    wrapper does not present as one.
+    """
+    async with manual_session() as session:
+        yield session
+
+
 async def check_connection() -> dict[str, Any]:
     """Verify connectivity and optional pgvector availability.
 

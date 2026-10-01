@@ -9,9 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.v1 import brand
+from app.api.v1 import auth, brand
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.core.middleware import CSRFMiddleware, SecurityHeadersMiddleware
 from app.db.session import check_connection
 
 DESCRIPTION = """
@@ -42,11 +43,18 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Added last, so they run first. CSRF has to see the request before routing
+    # decides anything, and the headers have to be on the way out whatever the
+    # outcome.
+    app.add_middleware(SecurityHeadersMiddleware, settings=settings)
+    app.add_middleware(CSRFMiddleware, settings=settings)
+
     static_dir = Path(__file__).resolve().parent / "static"
     if static_dir.is_dir():
         app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
     app.include_router(brand.router, prefix=settings.api_prefix)
+    app.include_router(auth.router, prefix=settings.api_prefix)
 
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon() -> FileResponse:
