@@ -1,0 +1,195 @@
+"""Application configuration.
+
+Single source of truth for settings. Loaded from environment/.env.
+Fails fast on missing secrets: a silent default is a security incident.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from typing import Annotated, Literal
+
+from pydantic import Field, ValidationError, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        # Repo-root .env, since backend/ is the package root and the app is
+        # started from there.
+        env_file=("../.env", ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    # Application
+    app_name: str = "CatalogGuard AI"
+    environment: Literal["development", "test", "staging", "production"] = "development"
+    debug: bool = False
+    log_level: str = "INFO"
+    api_prefix: str = "/api/v1"
+
+    # Database
+    database_url: str = Field(..., description="Postgres connection string")
+    database_pool_size: int = 5
+    database_max_overflow: int = 10
+    database_echo: bool = False
+    enable_pgvector: bool = True
+
+    # Redis / queue
+    redis_url: str = Field(..., description="Redis connection string for Dramatiq")
+    dramatiq_max_retries: int = 3
+    dramatiq_concurrency: int = 4
+    llm_max_concurrency: int = 2
+
+    # LLM
+    qroq_api_key: str = Field(..., description="Qroq API key. Never log this.")
+    qroq_base_url: str = "https://api.groq.com/openai/v1"
+    qroq_fast_model: str = "llama-3.3-70b-versatile"
+    qroq_reasoning_model: str = "openai/gpt-oss-120b"
+    qroq_embedding_model: str = "text-embedding-ada-002"
+    llm_timeout_seconds: int = 60
+    llm_max_retries: int = 2
+    llm_schema_repair_attempts: int = 2
+    llm_temperature: float = 0.0
+
+    # Security
+    jwt_secret: str = Field(..., min_length=32)
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 60
+    jwt_refresh_token_expire_days: int = 30
+    encryption_key: str = Field(..., description="Fernet key for credential encryption")
+    # NoDecode: pydantic-settings JSON-decodes complex fields from .env by
+    # default, which rejects plain comma-separated values. Disabling that
+    # lets the _split_csv validator below handle the raw string.
+    cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
+    log_mask_keys: Annotated[list[str], NoDecode] = [
+        "sku",
+        "price",
+        "cost",
+        "supplier_cost",
+        "margin",
+        "unreleased_description",
+        "upc",
+        "ean",
+        "gtin",
+        "asin",
+    ]
+
+    # Observability
+    langfuse_enabled: bool = False
+    langfuse_host: str = ""
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+
+    # Uploads
+    upload_dir: str = "./uploads"
+    max_upload_mb: int = 100
+
+    # Cost control
+    llm_cost_alert_enabled: bool = True
+    llm_monthly_budget_usd: float = 0.0
+
+    @field_validator("cors_origins", "log_mask_keys", mode="before")
+    @classmethod
+    def _split_csv(cls, v: object) -> object:
+        """Accept comma-separated strings from env/.env.
+
+        pydantic-settings attempts JSON decoding for complex fields before
+        validators run, so a bare comma-separated value fails to parse.
+        Returning a JSON list here satisfies that decoder while still
+        handling an already-decoded list.
+        """
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def _reject_placeholder_secret(cls, v: str) -> str:
+        if "REPLACE_ME" in v:
+            raise ValueError("JWT_SECRET is still a placeholder. Generate a real secret.")
+        return v
+
+    @field_validator("encryption_key")
+    @classmethod
+    def _validate_fernet_key(cls, v: str) -> str:
+        if "REPLACE_ME" in v:
+            raise ValueError("ENCRYPTION_KEY is still a placeholder.")
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(v)
+        except Exception as exc:
+            raise ValueError(
+                "ENCRYPTION_KEY must be a valid Fernet key. "
+                "Generate with: python -c \"from cryptography.fernet import "
+                'Fernet; print(Fernet.generate_key().decode())"'
+            ) from exc
+        return v
+
+    @field_validator("qroq_api_key")
+    @classmethod
+    def _reject_placeholder_llm_key(cls, v: str) -> str:
+        if "REPLACE_ME" in v:
+            raise ValueError("QROQ_API_KEY is still a placeholder.")
+        return v
+
+    @field_validator("redis_url")
+    @classmethod
+    def _require_redis_tls(cls, v: str) -> str:
+        """Upstash mandates TLS.
+
+        A `redis://` scheme fails when the connection is first used, deep in
+        a worker process, rather than at startup. Reject it during config
+        load so the failure is immediate and legible.
+        """
+        if v.startswith("redis://"):
+            raise ValueError(
+                "REDIS_URL must use the rediss:// scheme. Upstash requires TLS; "
+                "a plaintext redis:// connection fails only when first used."
+            )
+        if not v.startswith("rediss://"):
+            raise ValueError("REDIS_URL must start with rediss:// (TLS is mandatory).")
+        return v
+
+    @field_validator("database_url")
+    @classmethod
+    def _require_postgres_tls(cls, v: str) -> str:
+        """Neon mandates TLS. sslmode is required in the connection string."""
+        if not v.startswith("postgresql://") and not v.startswith("postgres://"):
+            raise ValueError("DATABASE_URL must be a postgres:// or postgresql:// URL.")
+        if "sslmode=" not in v:
+            raise ValueError(
+                "DATABASE_URL must set sslmode (use 'sslmode=require'). "
+                "Neon requires TLS."
+            )
+        return v
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment == "production"
+
+    @property
+    def mask_key_set(self) -> frozenset[str]:
+        return frozenset(self.log_mask_keys)
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+def get_settings_or_none() -> Settings | None:
+    """Non-raising accessor for import-time and CLI contexts.
+
+    Module-level `settings` is intentionally absent: importing this module
+    must not explode when a placeholder secret is still present, because
+    that breaks test collection and any CLI tooling that only needs the
+    field list. Startup paths call `get_settings()` and surface the error.
+    """
+    try:
+        return get_settings()
+    except ValidationError:
+        return None

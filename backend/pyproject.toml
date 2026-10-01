@@ -1,0 +1,97 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "catalogguard-backend"
+version = "0.1.0"
+description = "CatalogGuard AI backend - catalog reconciliation and change-safety platform"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    # Web framework. Async-native; Section 27.
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    # Settings and validation. Every AI decision produces a validated schema (Section 36).
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    # Persistence. D-006 hosted Postgres.
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "psycopg[binary]>=3.2",
+    "greenlet>=3.1",
+    # D-003: pgvector.
+    "pgvector>=0.3.6",
+    # D-005: job queue.
+    "dramatiq[redis]>=1.17",
+    # D-004: LLM integration. OpenAI-compatible client for Qroq.
+    "langchain>=0.3",
+    "langchain-core>=0.3",
+    "langchain-openai>=0.2",
+    "langgraph>=0.2",
+    # Auth. Section 33.
+    "pyjwt>=2.10",
+    "argon2-cffi>=23.1",
+    # Credential encryption at rest. Section 33.
+    "cryptography>=43",
+    # Ingestion. Section 49.
+    "pydantic-settings>=2.6",
+    "openpyxl>=3.1",
+    "pandas>=2.2",
+    "python-multipart>=0.0.17",
+    # D-007: self-hosted observability only.
+    "langfuse>=2.40",
+    "structlog>=24.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "respx>=0.22",
+    "fakeredis>=2.26",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "ASYNC", "S", "C4", "RET", "ARG"]
+ignore = [
+    "S101",  # assert is acceptable in tests
+    "B008",  # FastAPI Depends() in defaults is idiomatic
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "ARG", "N802"]
+"alembic/**" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["dramatiq.*", "langfuse.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = ["error::DeprecationWarning:app.*"]
+addopts = "-q --strict-markers"
+markers = [
+    "integration: requires live database or Redis",
+    "agent: exercises LangGraph nodes and tools",
+    "e2e: full workflow test",
+    "slow: long-running",
+]
