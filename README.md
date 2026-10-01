@@ -9,8 +9,11 @@ simulates. Humans approve. Connectors execute. Logs remember.
 
 ## Current status
 
-**Phase 8: authentication and authorization.** Schema, tenant isolation, and
-sign-in are complete. Catalog domain logic has not been written yet.
+**Phases 8–10: authentication, catalog domain, conflicts and risk.** Sign-in,
+tenant isolation, the catalog domain (normalization, identity, relationships,
+source authority), conflict detection, and deterministic risk scoring are
+complete and unit tested. Nothing has run against a live database or a live LLM
+provider yet.
 
 | Component | State |
 |---|---|
@@ -20,6 +23,12 @@ sign-in are complete. Catalog domain logic has not been written yet.
 | FastAPI app shell, `/health`, `/ready`, OpenAPI | Unit tested in-process |
 | ORM: 30 tables across tenancy, catalog, reconciliation, platform, compliance | Implemented, 325 tests |
 | Email/password sign-in, Argon2id, server-side sessions (D-014) | Implemented, unit tested |
+| Catalog normalization with an auditable alias table (D-015) | Implemented, unit tested |
+| Product identity resolution; only exact identifiers auto-link (D-015) | Implemented, unit tested |
+| Parent-child validation: orphans, cycles, variant axes, bundles (D-015) | Implemented, unit tested |
+| Source authority with per-field overrides; ties escalate (D-015) | Implemented, unit tested |
+| Conflict detection with available values, evidence and impact (§11) | Implemented, unit tested |
+| Deterministic risk scoring with weights and floors (D-016) | Implemented, unit tested |
 | RBAC guards and tenant binding wired to the session | Implemented, unit tested |
 | CSRF (signed double-submit) and security headers | Implemented, in-process tested |
 | Tenant isolation: composite FKs, tenant-scoped repository, RLS policies (D-011) | Implemented, unit tested |
@@ -28,7 +37,8 @@ sign-in are complete. Catalog domain logic has not been written yet.
 | Postgres (Neon) | TLS verified; **not yet applied**, awaiting rotation |
 | Redis (Upstash) | **Verified live** — Redis 8.4.0, TLS required |
 | LLM (Qroq) | Not wired; needs a rotated API key |
-| Catalog domain, agents, frontend | Not started |
+| Agents, LangGraph workflow, sandbox simulation | Not started |
+| Frontend | Not started |
 
 Users cannot self-register. The first administrator is created by a CLI, and
 there is no password reset yet — both are deliberate gaps, recorded in D-014.

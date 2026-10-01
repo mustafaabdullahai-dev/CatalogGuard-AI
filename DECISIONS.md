@@ -649,3 +649,147 @@ attacker a fresh budget of attempts.
 - **Redis-backed throttles.** An evictable cache guarding a security control.
 - **`X-Forwarded-For` as the throttle key.** Client-controlled unless a trusted
   proxy is in front; it would let a caller mint a fresh budget per request.
+
+---
+
+## D-015 — Catalog Domain: Normalization, Identity, Relationships, Authority
+
+**Phase:** 9 — Catalog domain
+**Date:** 2026-10-02
+**Status:** Decided
+
+### Decision
+
+Four deterministic services, no model calls, each returning evidence with its
+answer:
+
+1. **Normalization** (`app/services/catalog/normalization.py`) maps intake
+   columns onto a canonical field list through an explicit alias table, records
+   the rule that fired, and leaves anything unmapped alone.
+2. **Identity resolution** (`identity.py`) links records to existing products.
+   **Only an exact identifier match may link automatically.** Everything else —
+   fuzzy titles, brand plus title, an LLM's opinion — becomes a proposal.
+3. **Relationship validation** (`relationships.py`) reports structural defects
+   and has no write path at all.
+4. **Source authority** (`authority.py`) resolves per-field authority from a
+   default ladder plus per-field overrides, escalating ties.
+
+### Answers to the questions the requirements require asking
+
+The requirements (§12) say to ask the operator how source authority should be
+configured before implementing the final logic. Asked and answered:
+
+- **Authority model:** per-field overrides on a default ladder. PIM wins titles,
+  ERP wins price and cost, WMS wins inventory, the manufacturer wins identifiers.
+- **Equal-rank disagreement:** raise a conflict for a human. Never choose.
+- **Identity matches:** only exact identifiers auto-link.
+
+### Mandatory engineering rules
+
+1. **An unmapped column stays unmapped.** Guessing a canonical field is worse
+   than reporting an unknown one: the guess looks authoritative.
+2. **GS1 codes are compared as digits.** `4006381333931` and
+   `04006381333931` are the same code. Comparing raw strings manufactures a
+   conflict between sources that agree.
+3. **Absent evidence is not contradictory evidence.** A record with no GTIN is
+   not in conflict with one that has a different GTIN.
+4. **A stated identifier disagreement is disqualifying.** No amount of title
+   similarity survives it.
+5. **Size, material and style differences are disqualifying**; colour
+   differences only lower confidence. Suppliers name colours inconsistently —
+   "M" and "L" are genuinely different products.
+6. **A merge always needs approval.** Even an exact identifier match may link a
+   marketplace listing to a canonical product, but merging two products that both
+   exist is never automatic.
+7. **AI inference is never authoritative**, and a tenant's override map cannot
+   promote it.
+8. **Relationship validation never writes.** Findings become
+   `ProductRelationship` rows through the approval flow, or not at all.
+9. **Cycles are reported once, normalized by rotation**, and bundle edges are
+   checked separately from parent edges.
+10. **Cosmetic differences are one disagreement.** `10.0` and `"10.00"` are one
+    price; "Navy Blue" and "Dark Blue" are one color argument.
+
+### Trade-offs accepted
+
+- **Blocking keys, not a vector index.** Identity scoring is token overlap plus
+  character ratio. It is explainable and reproducible, and it will not catch a
+  paraphrase with no shared vocabulary. An embedding index (pgvector is already
+  in the schema) is the next step for the ambiguous band.
+- **SKUs cannot establish identity.** They are vendor-local, so the same string
+  from two vendors is routinely two products.
+- **The alias table needs human maintenance.** New supplier schemas mean new
+  aliases. `propose_aliases` surfaces candidates from real intake data rather
+  than guessing at runtime.
+- **No runtime fuzzy field-name matching.** It would map things nobody
+  reviewed, into fields nobody checks.
+- **Relationship depth is capped at 6 levels** as a warning, not an error;
+  marketplaces and reports give up before that.
+
+### Alternatives rejected
+
+- **LLM-only matching.** Prohibited by §8, and a confident wrong merge is
+  unrecoverable.
+- **Auto-linking above 0.95 confidence.** Text similarity measures wording, not
+  identity.
+- **A single global authority ladder.** Pricing and titles follow different rules.
+- **Picking a winner on ties.** Makes the result depend on iteration order.
+- **Writing repairs automatically.** §9 forbids it; the absence of a write path
+  is the only way to hold that line.
+
+---
+
+## D-016 — Risk Engine: Fixed Weights With Floors
+
+**Phase:** 10 — Conflict detection and risk
+**Date:** 2026-10-02
+**Status:** Decided
+
+### Decision
+
+Risk is a sum of fixed, published weights with four bands (LOW / MEDIUM / HIGH /
+CRITICAL), plus floors that specific consequences cannot be talked below.
+
+### Reason
+
+§16 requires a deterministic score and forbids the LLM from deciding final risk.
+A weighted table satisfies that in the strongest available way: the approver can
+add up the factors and predict the band, and can say precisely which factor they
+disagree with. A trained classifier cannot be argued with, and a risk score
+nobody can argue with is a risk score nobody trusts.
+
+The floors exist because the factors are a floor and not a ceiling. A GTIN
+change, a deletion, a broken relationship, or a compliance violation carries a
+consequence that does not shrink because the arithmetic came out low.
+
+### Mandatory engineering rules
+
+1. **The score is the sum of the listed factors.** No hidden adjustments.
+2. **Factors are sorted by weight, descending**, so the reason is visible at the
+   top of the approval screen.
+3. **HIGH and CRITICAL always require explicit approval.** LOW and MEDIUM are
+   applied only through the same approval flow, which is the more conservative
+   choice taken deliberately.
+4. **A floor that raises the band records why**, in `escalated_reason`.
+5. **Evidence and confidence are themselves risk factors.** A change nobody can
+   justify is risky because it is unexplainable to the person approving it.
+6. **The engine takes no clock and makes no network call.** Same context, same
+   result — tested.
+
+### Trade-offs accepted
+
+- **Weights are opinionated.** They encode a view about which changes are costly,
+  stated openly and tunable per workspace rather than hidden in a model.
+- **No cross-factor interaction.** A low-confidence change touching four channels
+  adds its weights without compounding. Interaction terms would be harder to
+  argue about, which is the property worth keeping.
+- **Sales figures are supplied by the caller.** The engine does not query an
+  analytics store, so a caller that passes zeros will understate risk. The
+  adapter is where that data must be attached.
+
+### Alternatives rejected
+
+- **LLM risk assessment.** Explicitly prohibited by §16.
+- **Trained classifier.** Not explainable, not reviewable, not reproducible.
+- **Binary risky / not risky.** §16 asks for four bands, and the middle two are
+  where review effort actually goes.

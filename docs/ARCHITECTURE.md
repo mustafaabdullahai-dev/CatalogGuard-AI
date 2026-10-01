@@ -228,6 +228,40 @@ There is no HTTP route that creates a user or grants a role.
 `python -m app.cli.bootstrap` is the only way in, which is what "no route to an
 identity" means in practice.
 
+### The reconciliation pipeline so far
+
+```
+intake row
+   │
+   ├─► normalization      canonical field names, units, GTIN digits, category paths
+   │                      → rules recorded, unmapped columns reported
+   │
+   ├─► identity           exact GTIN/UPC match?  → link automatically
+   │                      variant axis differs? → different product
+   │                      otherwise             → proposal for approval
+   │
+   ├─► authority          per-field rank: PIM/ERP/manufacturer overrides
+   │                      tie?                  → conflict, nobody chooses
+   │
+   ├─► conflicts          §11 content: values, authority, evidence, confidence,
+   │                      impact inputs. A conflict is not a proposal.
+   │
+   ├─► relationships      orphans, cycles, variant axes, duplicate variants,
+   │                      unapproved edges. Findings only — no write path.
+   │
+   └─► risk               fixed weights, four bands, floors for identity,
+                          deletion, relationship and compliance consequences
+```
+
+The ordering matters and is enforced by types: identity returns a match, not a
+product row; conflict detection returns a `DetectedConflict`, not a
+`ChangeProposal`; the risk engine takes a `RiskContext` value, not an ORM
+object. Each stage can be tested, explained, and replaced on its own.
+
+Where a value can be wrong in an unrecoverable way, the answer is a proposal.
+Where it is merely inconvenient, the answer is a finding. The distinction is the
+whole design.
+
 ---
 
 ## Roles (D-003, D-004)
@@ -280,6 +314,12 @@ marketplace listings. Telemetry must not leave our infrastructure.
 - **No RLS bypass role.** Cross-tenant migration and admin tooling must bind a
   tenant explicitly today. A separately privileged role is a deliberate future
   decision, not an oversight.
+- **No embedding-based identity matching yet.** Scoring is token overlap plus
+  character ratio: explainable and reproducible, but blind to a paraphrase with
+  no shared vocabulary. pgvector is in the schema for the ambiguous band.
+- **Risk weights are opinionated and not cross-interacting.** Weights encode a
+  view about which changes are costly (D-016). Interaction terms would compound
+  scores in ways a reviewer cannot check.
 - **No password reset and no self-service onboarding.** Both need an outbound
   email provider. Until one exists, a lost password is resolved by an operator
   with database access. Recorded in D-014 rather than quietly deferred.
