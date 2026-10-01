@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from pathlib import Path
 
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from app.api.v1 import brand
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.db.session import check_connection
 
 DESCRIPTION = """
 CatalogGuard AI — catalog reconciliation and change-safety platform.
@@ -36,6 +42,19 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    static_dir = Path(__file__).resolve().parent / "static"
+    if static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    app.include_router(brand.router, prefix=settings.api_prefix)
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> FileResponse:
+        path = static_dir / "logo.png"
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Not found")
+        return FileResponse(path, media_type="image/png")
+
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, object]:
         return {
@@ -46,20 +65,41 @@ def create_app() -> FastAPI:
 
     @app.get("/ready", tags=["system"])
     async def ready() -> dict[str, object]:
-        """Readiness probe. Component checks are added as they come online.
+        """Readiness probe.
 
-        Redis is reported as degraded, not fatal: the API can serve reads and
-        enqueue intent before a worker exists (see D-009 endpoint status).
+        Reports rather than raises: a failing probe is the answer this endpoint
+        exists to give, and raising would turn a dependency outage into a
+        500 that a load balancer cannot interpret.
+
+        Redis is not fatal. The API serves reads and enqueues intent before a
+        worker exists (see D-009 endpoint status), so an unreachable Redis is
+        `degraded`, not `unavailable`. Postgres and pgvector both gate real
+        traffic, so either one failing is `unavailable`.
         """
+        database = await check_connection()
+        checks: dict[str, str] = {
+            "database": str(database.get("database", "unavailable")),
+            "pgvector": str(database.get("pgvector", "unverified")),
+            "redis": "unverified",
+        }
+        if "error" in database:
+            checks["error"] = str(database["error"])
+
+        if checks["database"] == "ok" and checks["pgvector"] == "ok":
+            status = "ok"
+        elif checks["database"] == "ok":
+            status = "degraded"
+        else:
+            status = "unavailable"
+
         return {
-            "status": "degraded",
-            "checks": {
-                "database": "unverified",
-                "redis": "unavailable",
-                "llm": "unverified",
-                "pgvector": "unverified",
-            },
-            "note": "Component probes are wired in their respective phases.",
+            "status": status,
+            "checks": checks,
+            "note": (
+                "pgvector is required for similarity search and near-duplicate "
+                "detection (D-006). Redis is not probed here; the API can enqueue "
+                "intent without a live worker."
+            ),
         }
 
     return app

@@ -388,3 +388,157 @@ Catalogs contain proprietary manufacturer files, wholesale margins, and sensitiv
 - Losing some hosted-platform convenience: no managed eval UI, no vendor-side cost dashboard. Token and cost accounting must be built in-app (D-007 already mandates this).
 - Masking reduces trace fidelity for debugging. Accepted deliberately; the alternative is leaking commercial data.
 - Requires a deployment target to exist. If none is available yet, structured application logging (Section 55) carries observability until Langfuse is stood up, and LangSmith stays prohibited in the interim.
+
+---
+
+## D-011 — Tenant Isolation: Shared Schema + ORM Scoping + PostgreSQL RLS
+
+**Phase:** 7 — Data & Persistence
+**Date:** 2026-10-02
+**Status:** Decided
+
+### Decision
+
+Every tenant-owned table carries a NOT NULL `workspace_id` and is enforced at
+three independent layers:
+
+1. **Schema.** Tenant references are composite: `FOREIGN KEY (workspace_id, parent_id)
+   REFERENCES parent(workspace_id, id)`. Referenced tables carry
+   `UNIQUE (workspace_id, id)`. A row therefore cannot point at another
+   tenant's parent row even if the application asks it to.
+2. **ORM.** `TenantRepository` refuses to be constructed without a
+   `TenantContext`, applies the tenant predicate and the soft-delete predicate
+   centrally, and drops `workspace_id`/`id` from update payloads.
+3. **Database.** Row-level security with `FORCE ROW LEVEL SECURITY`, comparing
+   `workspace_id` against the transaction-local setting
+   `app.current_workspace`.
+
+### Reason
+
+A shared schema is required for pgvector similarity search across a tenant's
+corpus and for cross-table reconciliation queries, so schema-per-tenant is not
+available. Layer 1 is invisible to ad-hoc SQL. Layer 2 is invisible to raw SQL,
+migrations, reporting, and a future service account. Layer 3 is the only one
+that holds for all of them, which is why RLS ships even though the ORM already
+scopes correctly.
+
+### Mandatory engineering rules
+
+1. **Fail closed.** Policies use
+   `workspace_id = NULLIF(current_setting('app.current_workspace', true), '')::uuid`.
+   An unset or blank setting compares against NULL and matches nothing. A
+   connection with no bound tenant sees zero rows; it must never see all rows.
+2. **`FORCE` is mandatory.** PostgreSQL exempts a table's owner from its own
+   policies, and the application connects as the owner of these tables. Without
+   `FORCE`, the policies would be present in the schema and inert in production.
+3. **`SET LOCAL` only.** Tenant binding uses `set_config(..., true)`, which
+   discards the value at commit or rollback. A plain `SET` would survive on a
+   pooled connection and leak one tenant into the next request.
+4. **Bind, never interpolate.** The workspace id is always a bound parameter.
+5. **`WITH CHECK` on every policy.** Without it the read side is protected and
+   the write side is not, and a row can be inserted into another tenant.
+6. **Global tables are declared, not inferred.** `organizations`, `users`, and
+   `workspaces` carry no policy, and the exemption list is explicit so adding a
+   table is a deliberate act.
+
+### Consequences
+
+- A tenant-scoped query is now denied unless the request bound a tenant.
+  Shipping RLS before the authentication layer (Phase 8) means tenant queries
+  fail closed rather than open. That is the intended order.
+- Every tenant table carries an extra unique constraint and a `workspace_id`
+  index, and the initial migration is generated from ORM metadata so those stay
+  in step with the models.
+- Migration and admin tooling that legitimately needs cross-tenant access must
+  either bind a tenant explicitly or use a separately privileged role. There is
+  no bypass role yet; adding one is a separate decision.
+
+### Alternatives rejected
+
+- **Schema or database per tenant.** Required by some regulators, incompatible
+  with the single-query pgvector similarity search and with operational
+  simplicity at MVP scale. Reconsider at enterprise scale.
+- **Application-only filtering.** One missed predicate is a breach. RLS exists
+  because the ORM is not the only thing that will ever touch this database.
+- **`current_setting(name)` without the missing-ok flag.** Raises on an unbound
+  connection, turning a policy failure into an availability failure.
+
+
+---
+
+## D-012 — Soft Deletion + Explicit Version History
+
+**Phase:** 7 — Data & Persistence
+**Date:** 2026-10-02
+**Status:** Decided
+
+### Decision
+
+Mutating business tables are soft-deleted: a `deleted_at` timestamp and no row
+removal. Repositories filter `deleted_at IS NULL` centrally, so a soft-deleted
+record leaves query paths without every call site remembering to exclude it.
+
+Immutable tables (`audit_logs`, `product_versions`, `tool_calls`, `llm_usage`)
+declare neither `updated_at` nor `deleted_at`. Their shape asserts write-once:
+retraction is a new row, never an edit or a delete.
+
+Product history is explicit, not incidental. `product_versions` records the
+exact snapshot a reconciliation observed, so a proposal can always be replayed
+against the state it was computed from.
+
+### Reason
+
+Section 50 requires auditable change history and rollback. Deleting a product
+row would destroy the evidence of what a proposal was approved against, which
+is precisely what an auditor asks for. Making immutability structural rather
+than conventional means a `soft_delete` call on a version row fails at the type
+level instead of silently corrupting history.
+
+### Trade-offs accepted
+
+- Storage grows without automatic reclamation. Acceptable at MVP volumes.
+- Soft-deleted rows still occupy unique key space: a SKU freed by a soft delete
+  stays taken. Reusing a SKU would break replay of historical runs, so the
+  conservative reading wins.
+- Two base classes instead of one. The cost is small; the benefit is that
+  "immutable" is a type, not a comment.
+
+### Alternatives rejected
+
+- **Hard delete everywhere.** Destroys audit evidence. Unacceptable.
+- **A single `deleted_at` on every table.** Would let immutable history be
+  tombstoned, contradicting the append-only requirement in D-013.
+
+
+---
+
+## D-013 — Audit Logs Are Append-Only, Enforced by the Database
+
+**Phase:** 7 — Data & Persistence
+**Date:** 2026-10-02
+**Status:** Decided
+
+### Decision
+
+`audit_logs` has no `updated_at` and no `deleted_at` columns. In addition, the
+database refuses modification: a `BEFORE UPDATE` and a `BEFORE DELETE` trigger
+both call `catalogguard_audit_immutable()`, which raises
+`restrict_violation` for every operation, for every role, including the table
+owner.
+
+### Reason
+
+Application-level append-only is a convention that a bug, a direct `psql`
+session, or a future migration can bypass. The audit trail is the artifact an
+incident review depends on; its immutability is worth enforcing where it
+cannot be forgotten. RLS (D-011) covers who may read a row; this covers what
+may happen to one.
+
+### Trade-offs accepted
+
+- An erroneous audit row cannot be corrected or removed. It can only be
+  contradicted by a later row, which is the correct accounting model.
+- Retaining audit rows after a tenant offboards is a policy question, and GDPR
+  erasure obligations may eventually require a documented purge path. That is a
+  separate decision, and it must be explicit rather than an accidental side
+  effect of a cascade.

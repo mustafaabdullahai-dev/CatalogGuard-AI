@@ -9,21 +9,27 @@ simulates. Humans approve. Connectors execute. Logs remember.
 
 ## Current status
 
-**Phase 5–6: repository scaffold and development environment.** Backend
-foundation is in place. Catalog domain logic has not been written yet.
+**Phase 7: data and persistence.** The schema, tenant isolation, and migration
+tooling are complete. Catalog domain logic has not been written yet.
 
 | Component | State |
 |---|---|
 | Repository structure | Scaffolded |
 | Python 3.13 venv + pinned dependencies | Installed |
 | Settings, logging, edge masking | Implemented, unit tested |
-| FastAPI app shell, `/health`, `/ready`, OpenAPI | Running and verified |
-| Postgres (Neon) | TLS verified; authenticated connection pending |
+| FastAPI app shell, `/health`, `/ready`, OpenAPI | Unit tested in-process |
+| ORM: 28 tables across tenancy, catalog, reconciliation, platform, compliance | Implemented, 212 tests |
+| Tenant isolation: composite FKs, tenant-scoped repository, RLS policies (D-011) | Implemented, unit tested |
+| Append-only audit logs enforced by trigger (D-013) | Implemented, unit tested |
+| Initial migration, generated from ORM metadata | Offline SQL verified |
+| Postgres (Neon) | TLS verified; **not yet applied**, awaiting rotation |
 | Redis (Upstash) | **Verified live** — Redis 8.4.0, TLS required |
 | LLM (Qroq) | Not wired; needs a rotated API key |
 | Catalog domain, agents, frontend | Not started |
 
-Nothing here has been tested against a live database. Treat every capability
+The migration has never been applied to a live database. It has been rendered
+to SQL in both directions and asserted against the ORM, which catches drift and
+malformed DDL but cannot prove that Neon accepts it. Treat every capability
 above as *implemented but not verified* until the corresponding phase runs.
 
 ---
@@ -85,8 +91,50 @@ Swagger UI at `http://localhost:3000/docs` when the frontend proxies, or
 ### Tests and lint
 
 ```bash
-python -m pytest -q      # unit suite
-python -m ruff check app tests
+python -m pytest -q                   # unit suite, no database required
+python -m ruff check app tests alembic scripts
+```
+
+### Migrations
+
+The initial migration is a build artifact, generated from the ORM. Edit
+`app/models/`, then regenerate:
+
+```bash
+cd backend
+python -m scripts.generate_initial_migration   # rewrites alembic/versions/20261001_0001-*
+```
+
+A test asserts the committed file equals a fresh generation, so a model change
+that was never regenerated fails the suite rather than shipping.
+
+To render the SQL without a database, pass a URL Alembic will not connect to:
+
+```bash
+python -m alembic -x url="postgresql://u:p@example.invalid/db" upgrade head --sql
+python -m alembic -x url="postgresql://u:p@example.invalid/db" downgrade 0001:base --sql
+```
+
+### Tenant isolation
+
+Three independent layers, all required (D-011):
+
+1. **Schema** — composite foreign keys `(workspace_id, parent_id)`, so a row
+   cannot reference another tenant's parent row.
+2. **ORM** — `TenantRepository` refuses to exist without a `TenantContext` and
+   applies the tenant and soft-delete predicates centrally.
+3. **Database** — row-level security with `FORCE`, reading the
+   transaction-local setting `app.current_workspace`.
+
+RLS denies when no tenant is bound, so a query without one returns nothing
+rather than everything. Until authentication lands in Phase 8, nothing binds a
+tenant in production, which means tenant queries fail closed until then.
+
+```python
+from app.db.session import tenant_scope
+
+async with tenant_scope(workspace_id) as session:  # bound for this transaction
+    ...
 ```
 
 ---
@@ -115,6 +163,12 @@ failure would otherwise appear deep inside a worker rather than at startup.
   listings.
 - **Marketplace credentials are encrypted at rest** with a per-environment
   Fernet key, never stored as plaintext.
+- **Tenant isolation does not depend on any single layer** (D-011). Schema
+  constraints, the repository, and row-level security each hold for the cases
+  the others miss.
+- **Audit logs are immutable in the database** (D-013). A trigger rejects
+  `UPDATE` and `DELETE` for every role, so the trail cannot be edited even by
+  the application.
 
 ---
 
@@ -126,7 +180,8 @@ trade-offs are recorded in [`DECISIONS.md`](DECISIONS.md).
 Current entries: UI/UX direction (D-001), source authority (D-002), personas and
 approval authority (D-003), the integration-admin role (D-004), MVP scope (D-005),
 vector store (D-006), LLM provider (D-007), job queue (D-008), database hosting
-(D-009), and observability (D-010).
+(D-009), observability (D-010), tenant isolation (D-011), soft deletion and
+version history (D-012), and append-only audit logs (D-013).
 
 ---
 

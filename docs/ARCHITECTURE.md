@@ -100,11 +100,89 @@ connected channel is the highest blast-radius operation in the product.
 
 ---
 
-## Tenancy
+## Tenancy (D-011)
 
 `Organization → Workspace → Users → Catalogs → Connections`. Every query is
 workspace-scoped. Cross-tenant reads are treated as a security defect, not a
 bug.
+
+The unit of isolation is the **workspace**, not the organization: one
+organization may run separate marketplaces and credential sets per region, so
+those are separate tenants with separate approvals and separate risk
+configuration.
+
+Isolation is enforced at three layers, because each covers cases the others
+miss.
+
+**1. Schema.** Tenant references are composite:
+
+```sql
+FOREIGN KEY (workspace_id, catalog_id) REFERENCES catalogs (workspace_id, id)
+UNIQUE (workspace_id, id)   -- on every referenced tenant table
+```
+
+A row cannot point at another tenant's parent row even if the application
+constructs the insert itself. The single-column `catalog_id → catalogs.id` form
+is deliberately absent: it would bypass the pairing and make the ORM
+relationship ambiguous.
+
+**2. ORM.** `TenantRepository` takes a `TenantContext` in its constructor and
+refuses to exist without one. Tenant and soft-delete predicates are applied
+centrally, and `workspace_id` is stripped from update payloads so a caller
+cannot move a row between tenants.
+
+**3. Database.** Row-level security, `FORCE`d, on all 25 tenant tables:
+
+```sql
+CREATE POLICY tenant_isolation ON products FOR ALL
+USING      (workspace_id = NULLIF(current_setting('app.current_workspace', true), '')::uuid)
+WITH CHECK (workspace_id = NULLIF(current_setting('app.current_workspace', true), '')::uuid)
+```
+
+Three details are load-bearing:
+
+- **It fails closed.** An unset or blank setting compares against NULL and
+  matches nothing, so an unbound connection sees zero rows, not all rows.
+- **`FORCE` is mandatory.** PostgreSQL exempts a table's owner from its own
+  policies, and the application connects as that owner. Without `FORCE` the
+  policies would exist in the schema and be inert in production.
+- **`WITH CHECK` is mandatory.** Read-side protection alone still allows
+  inserting rows attributed to another workspace.
+
+The application binds a tenant per transaction with
+`set_config('app.current_workspace', <uuid>, true)`. The third argument is
+`SET LOCAL`, which discards the value at commit or rollback — required under a
+transaction-mode pooler, where a plain `SET` would survive on the backend
+connection and leak into the next request.
+
+`organizations`, `users`, and `workspaces` carry no policy: they sit at or above
+the boundary, and a policy keyed on a workspace's own `workspace_id` would be
+circular. That exemption list is explicit, so a newly added table is a
+deliberate act rather than an omission.
+
+`workspaces` therefore has no `workspace_id` column of its own — it *is* the
+tenant, and `id` is what every other table points at.
+
+### Immutability and history (D-012, D-013)
+
+| Table | Shape | Reason |
+|---|---|---|
+| `audit_logs` | `created_at` only; UPDATE and DELETE rejected by trigger | The trail an incident review depends on must not be editable, by any role |
+| `product_versions` | `created_at` only | A proposal must be replayable against the exact state it observed |
+| `tool_calls`, `llm_usage` | `created_at` only | Per-call records; revision would undermine cost accounting |
+| everything else | `updated_at`, `deleted_at` | Soft-deleted so history survives |
+
+Immutable tables have no `updated_at` and no `deleted_at` columns at all, so
+"append-only" is a type choice rather than a convention. Retraction is a new
+row. `TenantRepository` adapts via `hasattr(model, "deleted_at")`, so both
+shapes are read and written through the same repository.
+
+### Migrations are generated
+
+The initial migration is a build artifact produced from ORM metadata, so a
+model change without a regeneration fails the test suite. RLS policies are
+derived from the metadata at migration time rather than listed by hand, which
+means a newly added tenant table is protected by default.
 
 ---
 
@@ -150,8 +228,17 @@ marketplace listings. Telemetry must not leave our infrastructure.
 
 ## Known limitations
 
-- **Untested against a live database.** The engine and session layer are written
-  but no authenticated connection has been exercised.
+- **Untested against a live database.** The schema, migration, and RLS are
+  rendered to SQL in both directions and asserted against the ORM, but no
+  authenticated connection has exercised them. RLS behaviour in particular
+  (policy denial, `FORCE` under the owning role) needs a real Neon session to
+  confirm.
+- **No RLS bypass role.** Cross-tenant migration and admin tooling must bind a
+  tenant explicitly today. A separately privileged role is a deliberate future
+  decision, not an oversight.
+- **Authentication is not built yet.** Nothing binds a tenant in production, so
+  RLS currently denies every tenant query. This is the intended order: the
+  policy ships before the identity layer that satisfies it.
 - **Python 3.13.** Very new. Works, but a few dependencies may publish late
   wheels; 3.12 is the safer floor if that bites.
 - **No compliance RAG at MVP.** Compliance findings will be heuristic rather
