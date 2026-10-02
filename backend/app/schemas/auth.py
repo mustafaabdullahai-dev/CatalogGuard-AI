@@ -82,6 +82,60 @@ class CurrentSessionResponse(BaseModel):
     expires_at: datetime
 
 
+class PasswordResetRequest(BaseModel):
+    email: str = Field(max_length=320, description="Case-insensitive address")
+
+    @field_validator("email")
+    @classmethod
+    def _normalize(cls, v: str) -> str:
+        """Normalized here for the same reason as login.
+
+        The throttle key, the lookup, and the message recipient must all agree
+        on one spelling, or `Ops@example.com` gets a fresh budget on every
+        attempt and bypasses the limit entirely.
+        """
+        value = v.strip().lower()
+        if not value or "@" not in value or value.startswith("@"):
+            raise ValueError("not a valid email address")
+        return value
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str = Field(min_length=16, max_length=512)
+    new_password: Password
+
+
+class PasswordResetRequestedResponse(BaseModel):
+    """The only response the request endpoint ever returns.
+
+    Identical for a known address, an unknown one, and a disabled account. A
+    field like `"sent": true` would make this endpoint an account-existence
+    oracle, which is worse than the problem a reset solves: the person using it
+    is, by definition, someone who cannot prove who they are.
+    """
+
+    accepted: bool = True
+    # Advisory only: a client may render this but must not branch on it. The
+    # wording says "queued" rather than "sent" because the only transport is the
+    # D-017 outbox, and a UI claiming delivery that has not happened is exactly
+    # the kind of small lie that makes a support queue undiagnosable.
+    message: str = (
+        "If that address has an active account, a reset link has been queued "
+        "for delivery."
+    )
+
+
+class PasswordResetCompletedResponse(BaseModel):
+    """No session is issued here.
+
+    The caller is signing in from an unknown device, and returning a session
+    would make the reset the thing that authenticates an attacker.
+    """
+
+    password_reset: bool = True
+    sessions_revoked: int
+
+
 class CsrfTokenResponse(BaseModel):
     """A CSRF token for the double-submit header.
 

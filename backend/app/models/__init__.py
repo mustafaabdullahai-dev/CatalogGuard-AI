@@ -57,11 +57,14 @@ from app.models.reconciliation import (
     SimulationRun,
 )
 from app.models.tenancy import (
+    EmailOutbox,
     Organization,
+    PasswordResetToken,
     RoleCapabilities,
     User,
     UserRole,
     Workspace,
+    WorkspaceInvitation,
     WorkspaceMembership,
 )
 
@@ -79,6 +82,7 @@ __all__ = [
     "Conflict",
     "ConflictType",
     "ConnectionStatus",
+    "EmailOutbox",
     "ExecutionJob",
     "ExecutionStatus",
     "HealthScore",
@@ -86,6 +90,7 @@ __all__ = [
     "MarketplaceConnection",
     "MarketplaceProduct",
     "Organization",
+    "PasswordResetToken",
     "Product",
     "ProductIdentifier",
     "ProductRelationship",
@@ -98,8 +103,8 @@ __all__ = [
     "RiskLevel",
     "RoleCapabilities",
     "SimulationRun",
-    "SoftDeleteMixin",
     "SoftDeletableTenantEntity",
+    "SoftDeleteMixin",
     "SourceRecord",
     "SourceType",
     "TenantContext",
@@ -111,6 +116,7 @@ __all__ = [
     "User",
     "UserRole",
     "Workspace",
+    "WorkspaceInvitation",
     "WorkspaceMembership",
     "new_uuid",
     "tenant_filter",

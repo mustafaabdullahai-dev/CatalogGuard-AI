@@ -91,6 +91,34 @@ class Settings(BaseSettings):
     login_lockout_minutes: int = 15
     login_ip_max_failures: int = 20
 
+    # Password reset and invitations (D-017).
+    #
+    # Deliberately separate budgets from the login counters. Sharing them would
+    # let anyone who can submit a reset request for a victim's address lock that
+    # account out of signing in, which turns a convenience feature into a
+    # denial-of-service lever aimed at the very person using it.
+    reset_max_requests: int = 3
+    reset_window_minutes: int = 60
+    reset_lockout_minutes: int = 15
+    reset_ip_max_requests: int = 20
+    # Short. A forgotten password should not need an operator, but a token
+    # valid for a week in a shared inbox is a credential waiting to be found.
+    reset_token_ttl_minutes: int = 60
+    # Cap on live tokens per account. Older ones are invalidated when a new one
+    # is issued, so this is also the blast radius of a leaked inbox history.
+    reset_max_live_tokens: int = 3
+    invitation_token_ttl_hours: int = 72
+    invitation_max_per_recipient: int = 10
+
+    # Outbound mail. `outbox` writes the message to `email_outbox` and stops
+    # there, which is honest: the row says it was never sent rather than
+    # implying a transport exists. Adding a provider means adding an adapter
+    # and a value here; no caller changes.
+    mail_delivery: Literal["outbox"] = "outbox"
+    # Where the link in a message points. Required, because a reset link built
+    # from the API's own host would send people to an internal hostname.
+    app_base_url: str = "http://localhost:3000"
+
     # Passwords
     password_min_length: int = 12
     # NoDecode: pydantic-settings JSON-decodes complex fields from .env by

@@ -361,6 +361,35 @@ def upgrade() -> None:
     )
 
     # --------------------------------------------------------------------
+    # email_outbox
+    # Outbound mail awaiting a real transport
+    # --------------------------------------------------------------------
+    op.create_table(
+        "email_outbox",
+        sa.Column("id", sa.UUID(), nullable=False),
+        sa.Column("recipient", sa.String(length=320), nullable=False),
+        sa.Column("subject", sa.String(length=320), nullable=False),
+        sa.Column("body_text", sa.Text(), nullable=False),
+        sa.Column("template", sa.String(length=64), nullable=False),
+        sa.Column("related_id", sa.UUID(), nullable=True),
+        sa.Column("delivery_channel", sa.String(length=32), nullable=False),
+        sa.Column("sent_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("delivery_error", sa.Text(), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_email_outbox")),
+        comment="Outbound mail awaiting a real transport",
+    )
+
+    op.create_index("ix_email_outbox_created_at", "email_outbox", ["created_at"])
+    op.create_index("ix_email_outbox_recipient", "email_outbox", ["recipient"])
+    op.create_index("ix_email_outbox_related_id", "email_outbox", ["related_id"])
+
+    # --------------------------------------------------------------------
     # llm_usage
     # Per-call token and cost accounting
     # --------------------------------------------------------------------
@@ -676,6 +705,38 @@ def upgrade() -> None:
         "health_scores",
         ["workspace_id", "catalog_id", "computed_at"],
     )
+
+    # --------------------------------------------------------------------
+    # password_reset_tokens
+    # Single-use password reset tokens; stores digests only
+    # --------------------------------------------------------------------
+    op.create_table(
+        "password_reset_tokens",
+        sa.Column("id", sa.UUID(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
+        sa.Column("token_hash", sa.String(length=64), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("consumed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("requested_ip", sa.String(length=45), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_id"],
+            ["users.id"],
+            name=op.f("fk_password_reset_tokens_user_id_users"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_password_reset_tokens")),
+        sa.UniqueConstraint("token_hash", name=op.f("uq_password_reset_tokens_token_hash")),
+        comment="Single-use password reset tokens; stores digests only",
+    )
+
+    op.create_index("ix_password_reset_tokens_expires_at", "password_reset_tokens", ["expires_at"])
+    op.create_index("ix_password_reset_tokens_user_id", "password_reset_tokens", ["user_id"])
 
     # --------------------------------------------------------------------
     # products
@@ -1335,6 +1396,85 @@ def upgrade() -> None:
     op.create_index("ix_product_versions_workspace_id", "product_versions", ["workspace_id"])
 
     # --------------------------------------------------------------------
+    # workspace_invitations
+    # Single-use workspace invitations with a bound role
+    # --------------------------------------------------------------------
+    op.create_table(
+        "workspace_invitations",
+        sa.Column("workspace_id", sa.UUID(), nullable=False),
+        sa.Column("email", sa.String(length=320), nullable=False),
+        sa.Column(
+            "role",
+            sa.Enum(
+                "ecommerce_ops_manager",
+                "data_steward",
+                "data_integration_admin",
+                "merchandiser",
+                "seo_specialist",
+                name="user_role",
+                native_enum=False,
+                length=64,
+            ),
+            nullable=False,
+        ),
+        sa.Column("invited_by_user_id", sa.UUID(), nullable=False),
+        sa.Column("token_hash", sa.String(length=64), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("accepted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("accepted_by_user_id", sa.UUID(), nullable=True),
+        sa.Column("id", sa.UUID(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.ForeignKeyConstraint(
+            ["accepted_by_user_id"],
+            ["users.id"],
+            name=op.f("fk_workspace_invitations_accepted_by_user_id_users"),
+            ondelete="SET NULL",
+        ),
+        sa.ForeignKeyConstraint(
+            ["invited_by_user_id"],
+            ["users.id"],
+            name=op.f("fk_workspace_invitations_invited_by_user_id_users"),
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name=op.f("fk_workspace_invitations_workspace_id_workspaces"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_workspace_invitations")),
+        sa.UniqueConstraint("token_hash", name=op.f("uq_workspace_invitations_token_hash")),
+        sa.UniqueConstraint(
+            "workspace_id", "id", name=op.f("uq_workspace_invitations_workspace_id_id")
+        ),
+        comment="Single-use workspace invitations with a bound role",
+    )
+
+    op.create_index("ix_workspace_invitations_email", "workspace_invitations", ["email"])
+    op.create_index(
+        "ix_workspace_invitations_workspace_id", "workspace_invitations", ["workspace_id"]
+    )
+    op.create_index(
+        "uq_workspace_invitations_live",
+        "workspace_invitations",
+        ["workspace_id", "email"],
+        unique=True,
+        postgresql_where=sa.text("revoked_at IS NULL AND accepted_at IS NULL"),
+    )
+
+    # --------------------------------------------------------------------
     # workspace_memberships
     # Per-workspace role assignment
     # --------------------------------------------------------------------
@@ -1718,6 +1858,7 @@ def downgrade() -> None:
         "execution_jobs",
         "approval_requests",
         "workspace_memberships",
+        "workspace_invitations",
         "product_versions",
         "product_relationships",
         "product_identifiers",
@@ -1729,6 +1870,7 @@ def downgrade() -> None:
         "source_records",
         "reconciliation_runs",
         "products",
+        "password_reset_tokens",
         "health_scores",
         "compliance_chunks",
         "auth_sessions",
@@ -1737,6 +1879,7 @@ def downgrade() -> None:
         "marketplace_connections",
         "login_throttles",
         "llm_usage",
+        "email_outbox",
         "compliance_documents",
         "catalogs",
         "catalog_sources",

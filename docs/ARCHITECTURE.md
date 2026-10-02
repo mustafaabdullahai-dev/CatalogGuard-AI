@@ -228,6 +228,80 @@ There is no HTTP route that creates a user or grants a role.
 `python -m app.cli.bootstrap` is the only way in, which is what "no route to an
 identity" means in practice.
 
+### Account recovery and invitations (D-017)
+
+```
+POST /auth/password-reset         ──► throttle (reset_email, reset_ip)
+                                          │
+                     known + active ──────┴────── anything else: same 202, same body
+                          │
+                          └─► retire oldest live token ──► insert digest
+                                 ──► queue email_outbox row
+
+POST /auth/password-reset/confirm ──► conditional UPDATE ... WHERE consumed_at IS NULL
+                                        AND expires_at > now      ──► one winner
+                                          │
+                     set hash ──► revoke every session ──► delete remaining tokens
+```
+
+The four decisions that matter:
+
+- **The request endpoint cannot tell you whether an address exists.** Same 202,
+  same body, same wording, whether the account is real, unknown, or disabled. A
+  reset form exists for people who cannot prove who they are; making it an
+  existence oracle would leak more than the reset protects. The response says
+  the message was *queued*, because queued is what happened.
+- **Single-use is enforced by the `WHERE` clause, not by a prior read.** Expired,
+  consumed, and revoked tokens all fail as "no row matched". A read-then-write
+  would let two concurrent submissions both win.
+- **A reset revokes every session and issues none.** A reset is usually a
+  response to a compromise; leaving the intruder's cookie alive makes the reset
+  cosmetic. Issuing a session from the reset request would authenticate whoever
+  read the inbox.
+- **Reset throttling is a separate budget from login throttling.** Sharing them
+  would let anyone who can submit a reset request for a victim's address keep
+  that account locked out of signing in — a denial-of-service aimed at the person
+  the feature is meant to help.
+
+Invitations:
+
+```
+POST /invitations              (admin only) ──► workspace_invitations row, role bound
+POST /invitations/resend       (admin only) ──► same row, new token, old one dead
+GET  /invitations              (admin only)
+DELETE /invitations/{id}       (admin only) ──► scoped by workspace in the WHERE
+POST /auth/invitations/accept  (public)     ──► user + membership, no session
+```
+
+- **The role is read from the row.** `accept()` has no role parameter at all, so
+  there is nothing for a caller to tamper with. That is what makes it safe to
+  send an invitation by email: it grants exactly the capability an admin chose.
+- **One live invitation per address per workspace**, enforced by a partial unique
+  index. Resending replaces the token on the same row, so revoking is
+  unambiguous. Two live rows would mean revoking one and still holding access
+  granted by the other.
+- **An existing account keeps its password.** Accepting adds the membership and
+  leaves the credential alone; supplying a password for an account that already
+  has one is an error, not a silent overwrite. An invitation link is therefore
+  not a password-reset vector.
+- **A weak password leaves the invitation live.** The policy error is raised
+  before anything commits, so the same link works on a second attempt. Someone
+  who cannot reach the inbox cannot get a replacement link.
+
+**Delivery is a port with one adapter.** There is no mail provider configured, so
+`OutboxDelivery` writes the message to `email_outbox` and stops, leaving
+`sent_at` NULL: a row that says it was never sent is a queue to drain, whereas a
+row marked sent that was never sent is a support ticket about an email that will
+never arrive. Messages are written in the same transaction as the token that
+caused them, so a crash cannot leave a live token nobody can retrieve. Adding a
+provider means adding an adapter and one setting; no caller changes.
+
+Links are never logged, in any environment. D-010 masks any run of 32 or more
+characters, which is longer than every token issued here, so a development-only
+"log the link anyway" branch would emit a line that looks useful and is not.
+`python -m app.cli.outbox` prints queued messages and refuses to run in
+production.
+
 ### The reconciliation pipeline so far
 
 ```
@@ -320,9 +394,16 @@ marketplace listings. Telemetry must not leave our infrastructure.
 - **Risk weights are opinionated and not cross-interacting.** Weights encode a
   view about which changes are costly (D-016). Interaction terms would compound
   scores in ways a reviewer cannot check.
-- **No password reset and no self-service onboarding.** Both need an outbound
-  email provider. Until one exists, a lost password is resolved by an operator
-  with database access. Recorded in D-014 rather than quietly deferred.
+- **Password reset and invitations exist, but nothing is sent.** Both queue to
+  `email_outbox` (D-017) because no mail provider is configured. The token
+  lifecycle, single-use enforcement, throttling, and authorization are
+  implemented and tested; the transport is one adapter away. An operator reads
+  the link with `python -m app.cli.outbox`, which is a development affordance and
+  refuses to run in production.
+- **Password reset is not a delivery guarantee.** A queued message nobody reads
+  means a reset that never arrives, and the person cannot tell that from an
+  address that does not exist — which is the point of the identical response, and
+  also its cost.
 - **No MFA or SSO.** The natural next additions; both attach to the session
   record rather than to the password path.
 - **Every authenticated request does two indexed lookups** — session, then

@@ -222,6 +222,13 @@ class TestSchemaLevelIsolation:
             "workspaces",
             "auth_sessions",
             "login_throttles",
+            # D-017. Both are account-recovery tables, and account recovery
+            # happens precisely when the person cannot say which workspace they
+            # belong to. Tenant-scoping either one would make it unusable in the
+            # case it exists for. Neither stores catalog data, so neither can
+            # leak another tenant's.
+            "password_reset_tokens",
+            "email_outbox",
         }
         missing = [
             name
@@ -314,6 +321,8 @@ class TestTenantKeyConstraintExists:
 
 def test_metadata_is_internally_consistent() -> None:
     """Guards against an accidentally broken metadata configuration."""
-    assert len(Base.metadata.tables) == 30
+    # 30 through D-016, plus D-017's password_reset_tokens, workspace_invitations
+    # and email_outbox.
+    assert len(Base.metadata.tables) == 33
     names = [t.name for t in Base.metadata.tables.values()]
     assert len(names) == len(set(names))

@@ -793,3 +793,92 @@ consequence that does not shrink because the arithmetic came out low.
 - **Trained classifier.** Not explainable, not reviewable, not reproducible.
 - **Binary risky / not risky.** §16 asks for four bands, and the middle two are
   where review effort actually goes.
+
+## D-017 — Account Recovery and Invitations: Outbox Delivery, Sessions Revoked
+
+**Phase:** 11 — Password reset and self-service onboarding
+**Date:** 2026-10-02
+**Status:** Decided
+
+### Decision
+
+Password reset and workspace invitations ship together, behind a `MailDelivery`
+port whose only adapter writes to an `email_outbox` table. Reset requests are
+answered identically whether or not the account exists. Reset tokens are
+single-use, and a successful reset revokes every session and issues none.
+
+### Answers to the questions the requirements require asking
+
+**Q: May a reset request reveal whether an address has an account?**
+No. Same 202, same body, same wording, and the response says the message was
+*queued* rather than *sent*. The reset form is reachable by people who cannot
+prove who they are; an existence oracle would leak the user list to whoever
+typed an address into one text box.
+
+**Q: Which session identifiers are affected by a reset?**
+All of them, in every workspace, on every device, and no new one is issued. A
+reset usually means a password was exposed, and revoking only the requesting
+device would leave the credential the attacker already holds usable. Issuing a
+session at reset time would authenticate whoever read the inbox.
+
+**Q: What role does a new user get, and who chooses it?**
+The issuing administrator, at issue time, recorded in the row. `accept()` takes
+no role parameter, so there is nothing for the invitation holder to tamper with.
+**Q: What if the invited address already has an account?**
+The membership is added and the existing password is left alone. Supplying a
+password for an account that has one is an error, not an overwrite, so an
+invitation link is never a password-reset vector.
+**Q: What if the password is rejected by policy?**
+The invitation stays live and the same link works on a second attempt. Someone
+who cannot reach the inbox cannot obtain a replacement link.
+**Q: May a mail provider be plugged in later without touching callers?**
+Yes. Callers depend on `MailDelivery`, never on a provider. The queued row, its
+`sent_at`, and its retry count are the transport's business, not the caller's.
+
+### Mandatory engineering rules
+
+- 256-bit `secrets.token_urlsafe`, stored as a SHA-256 digest. Plaintext tokens
+  exist only in the request that mints them and in the queued message body.
+- Single-use is enforced by a conditional `UPDATE ... WHERE consumed_at IS NULL
+  AND expires_at > now`. Expired, consumed and revoked tokens are all "no row
+  matched"; no prior read decides who wins.
+- The role and workspace come from the invitation row, never from the acceptance
+  body. Revocation is scoped by workspace in the `WHERE` clause.
+- One live invitation per address per workspace, enforced by a partial unique
+  index. Resend replaces the token on the same row, so revoking is unambiguous.
+- Reset throttling uses its own scopes (`reset_email`, `reset_ip`), separate from
+  login. A shared budget lets anyone keep a victim locked out of signing in —
+  DoS aimed at the person the feature helps.
+- Message bodies and live tokens are never logged in any environment. D-010 masks
+  any run of 32+ characters, which covers every token length here.
+- The outbox row is written in the same transaction as the token that caused it.
+
+### Trade-offs accepted
+
+- **Nothing is actually sent yet.** With no provider configured, a queued message
+  reaches a human who runs `python -m app.cli.outbox`. That is the honest state
+  of the feature, and the port means the swap is one adapter plus one setting.
+- **The identical response costs diagnosability.** A queued message nobody reads
+  is indistinguishable from an address that does not exist. That is the price of
+  not publishing the user list, and it is a deliberate one.
+- **Global tables for reset and outbox.** `password_reset_tokens` and
+  `email_outbox` have no `workspace_id`. Resolution must work before anyone has
+  chosen a workspace, and mail is not tenant data; only `workspace_invitations` is
+  tenant-scoped.
+- **Retiring the oldest live token on re-request.** Three live tokens per address
+  keeps an attacker from invalidating a genuine link with a flood of requests,
+  at the cost of sometimes invalidating one too early.
+
+### Alternatives rejected
+
+- **Email confirmation on sign-up.** No route may create an identity (D-014);
+  onboarding goes through an administrator who already has the capability to
+  grant it.
+- **"Forgot your password?" revealing a live token to the caller.** Convenient for
+  development and a credential leak in every other environment.
+- **Revoking only the current session.** Faster for the person resetting, and
+  exactly what a compromised account does not want.
+- **A `django-password`-style module-level cache.** Tokens that must be
+  single-use belong in the only store that can enforce it atomically.
+- **Throttling resets through the login limiter.** One shared counter turns a
+  safety feature into a remote lockout.

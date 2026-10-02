@@ -348,6 +348,35 @@ class TestIndexParity:
         for index in Base.metadata.tables[table_name].indexes:
             assert index.name in created, f"index {index.name} missing from migration"
 
+    def test_partial_index_predicates_survive_generation(
+        self, migration_source: str
+    ) -> None:
+        """A partial index without its predicate is a different constraint.
+
+        `uq_workspace_invitations_live` is unique over live invitations only.
+        Generated without the WHERE clause it would be unique over *every*
+        invitation ever sent, which fails the second invite a person ever
+        receives. A parity check on the index name alone cannot see that, so the
+        predicate is asserted directly.
+        """
+        for table in Base.metadata.tables.values():
+            for index in table.indexes:
+                predicate = index.dialect_options["postgresql"].get("where")
+                if predicate is None:
+                    continue
+                rendered = str(predicate.compile(dialect=postgresql.dialect())).strip()
+                assert index.name in migration_source
+                # Quote-agnostic: ruff reformats the generated file and may pick
+                # either quote style, and this test is about the predicate, not
+                # about punctuation.
+                carried = re.search(
+                    r"postgresql_where=sa\.text\((?P<q>[\"'])"
+                    + re.escape(rendered)
+                    + r"(?P=q)\)",
+                    migration_source,
+                )
+                assert carried, f"{index.name} lost its WHERE clause in the migration"
+
     def test_index_names_are_unique_across_the_migration(
         self, migration_source: str
     ) -> None:

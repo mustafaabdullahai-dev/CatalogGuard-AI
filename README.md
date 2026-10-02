@@ -21,8 +21,10 @@ provider yet.
 | Python 3.13 venv + pinned dependencies | Installed |
 | Settings, logging, edge masking | Implemented, unit tested |
 | FastAPI app shell, `/health`, `/ready`, OpenAPI | Unit tested in-process |
-| ORM: 30 tables across tenancy, catalog, reconciliation, platform, compliance | Implemented, 325 tests |
+| ORM: 33 tables across tenancy, catalog, reconciliation, platform, compliance | Implemented, 623 tests |
 | Email/password sign-in, Argon2id, server-side sessions (D-014) | Implemented, unit tested |
+| Password reset: single-use tokens, session revocation, outbox delivery (D-017) | Implemented, unit tested |
+| Workspace invitations: role bound at issue, admin-gated (D-017) | Implemented, unit tested |
 | Catalog normalization with an auditable alias table (D-015) | Implemented, unit tested |
 | Product identity resolution; only exact identifiers auto-link (D-015) | Implemented, unit tested |
 | Parent-child validation: orphans, cycles, variant axes, bundles (D-015) | Implemented, unit tested |
@@ -38,10 +40,17 @@ provider yet.
 | Redis (Upstash) | **Verified live** — Redis 8.4.0, TLS required |
 | LLM (Qroq) | Not wired; needs a rotated API key |
 | Agents, LangGraph workflow, sandbox simulation | Not started |
-| Frontend | Not started |
+| Frontend: dashboard, catalog explorer, approval center | Implemented, unit tested |
+| Outbound mail transport | Not configured; messages queue to `email_outbox` (D-017) |
 
-Users cannot self-register. The first administrator is created by a CLI, and
-there is no password reset yet — both are deliberate gaps, recorded in D-014.
+Users cannot self-register: the first administrator is created by a CLI, and
+every subsequent user arrives through an invitation an administrator issues.
+A lost password is resolved with `POST /api/v1/auth/password-reset`. Both were
+gaps in D-014 and are closed in D-017.
+
+Neither flow sends mail yet. Both queue a message to `email_outbox` and stop,
+because no mail provider is configured. `python -m app.cli.outbox` prints the
+queued messages, which is how the flows are exercised end to end offline.
 
 The migration has never been applied to a live database. It has been rendered
 to SQL in both directions and asserted against the ORM, which catches drift and
@@ -200,6 +209,14 @@ Config **fails fast** on placeholder secrets and on plaintext connection
 strings. A `redis://` URL is rejected because Upstash requires TLS and the
 failure would otherwise appear deep inside a worker rather than at startup.
 
+Two settings from D-017 are worth reading before either flow is exercised:
+
+| Variable | Why it matters |
+| --- | --- |
+| `MAIL_DELIVERY` | Only `outbox` exists. Messages are written to `email_outbox` with `sent_at` NULL and go nowhere else. |
+| `APP_BASE_URL` | The host the emailed link points at. Left unset, a reset sends people to the API's own hostname. |
+| `RESET_MAX_REQUESTS`, `RESET_IP_MAX_REQUESTS` | A separate budget from the login counters, so nobody can lock an account out by asking for its password to be reset. |
+
 ---
 
 ## Security posture
@@ -228,6 +245,14 @@ failure would otherwise appear deep inside a worker rather than at startup.
   be used to enumerate accounts.
 - **Login attempts are throttled twice** (D-014) — per account and per IP —
   because neither alone stops guessing and account spraying.
+- **A reset request reveals nothing** (D-017). Same 202, same body, same hashing
+  cost whether or not the address exists, and the response says the message was
+  queued rather than sent.
+- **A reset ends every session** (D-017) and issues none. Revoking only the
+  requesting device leaves whatever prompted the reset still signed in.
+- **Invitations grant only what the inviter chose** (D-017). The role comes from
+  the stored row and acceptance takes no role parameter, and an existing
+  account's password is never overwritten by accepting one.
 
 ---
 
@@ -240,8 +265,9 @@ Current entries: UI/UX direction (D-001), source authority (D-002), personas and
 approval authority (D-003), the integration-admin role (D-004), MVP scope (D-005),
 vector store (D-006), LLM provider (D-007), job queue (D-008), database hosting
 (D-009), observability (D-010), tenant isolation (D-011), soft deletion and
-version history (D-012), append-only audit logs (D-013), and authentication
-(D-014).
+version history (D-012), append-only audit logs (D-013), authentication (D-014),
+the catalog domain (D-015), the risk engine (D-016), and account recovery and
+invitations (D-017).
 
 ---
 

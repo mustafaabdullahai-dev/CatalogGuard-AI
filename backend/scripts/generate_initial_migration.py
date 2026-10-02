@@ -31,6 +31,7 @@ from alembic.autogenerate.api import AutogenContext
 from alembic.migration import MigrationContext
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import MetaData, Table, create_mock_engine
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import TSVECTOR
 
 import app.models  # noqa: F401  registers tables on Base.metadata
@@ -237,10 +238,17 @@ def _index_calls(table: Table) -> Iterator[str]:
             continue
         seen.add(key)
         columns = ", ".join(repr(c.name) for c in index.columns)
-        unique = ", unique=True" if index.unique else ""
-        yield (
-            f"op.create_index({index.name!r}, {table.name!r}, [{columns}]{unique})"
-        )
+        args = f"op.create_index({index.name!r}, {table.name!r}, [{columns}]"
+        if index.unique:
+            args += ", unique=True"
+        # A partial index is a different constraint, not a nicer one. Dropping
+        # the predicate would silently widen a uniqueness guarantee that only
+        # holds over the live rows, so the WHERE clause has to travel with it.
+        predicate = index.dialect_options["postgresql"].get("where")
+        if predicate is not None:
+            rendered = str(predicate.compile(dialect=postgresql.dialect())).strip()
+            args += f", postgresql_where=sa.text({rendered!r})"
+        yield f"{args})"
 
 
 def generate() -> str:

@@ -31,10 +31,15 @@ from app.schemas.auth import (
     CurrentSessionResponse,
     LoginRequest,
     LoginResponse,
+    PasswordResetCompletedResponse,
+    PasswordResetConfirm,
+    PasswordResetRequest,
+    PasswordResetRequestedResponse,
     SessionUser,
     WorkspaceRef,
 )
 from app.services.auth import login as login_service
+from app.services.auth import password_reset as reset_service
 from app.services.auth import sessions as session_service
 
 router = APIRouter(tags=["auth"])
@@ -248,7 +253,7 @@ async def change_password(
         ) from None
     except PasswordPolicyError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
     await db.commit()
@@ -289,3 +294,71 @@ async def csrf(request: Request, response: Response) -> CsrfTokenResponse:
         csrf_token=token,
         header_name=settings.csrf_header_name,
     )
+
+
+@router.post(
+    "/auth/password-reset",
+    response_model=PasswordResetRequestedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Request a password reset link",
+)
+async def request_password_reset(
+    request: Request,
+    body: PasswordResetRequest,
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> PasswordResetRequestedResponse:
+    """Always 202 with the same body, whatever the address turns out to be.
+
+    202 rather than 200 because nothing has happened yet: the message is queued,
+    not sent. `PasswordResetRequestedResponse` says so in words too, since a
+    client that renders "sent" on a 200 is making a claim the server cannot
+    support while the only transport is the outbox.
+    """
+    await reset_service.request_reset(
+        db,
+        email=body.email,
+        ip_address=_client_ip(request),
+    )
+    await db.commit()
+    return PasswordResetRequestedResponse()
+
+
+@router.post(
+    "/auth/password-reset/confirm",
+    response_model=PasswordResetCompletedResponse,
+    summary="Redeem a reset token",
+)
+async def confirm_password_reset(
+    body: PasswordResetConfirm,
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> PasswordResetCompletedResponse:
+    """Set the new password and revoke every session the account had.
+
+    Revoking all sessions is the point: a reset is usually somebody's response
+    to a compromise, and a session cookie issued to the intruder survives a
+    password change unless it is explicitly killed.
+
+    No session is returned. The reset came from a link in an inbox; issuing a
+    session here would authenticate whoever presented the link, which is the
+    one party this flow cannot yet identify.
+    """
+    try:
+        result = await reset_service.confirm_reset(
+            db, token=body.token, new_password=body.new_password
+        )
+    except reset_service.InvalidResetTokenError:
+        # Expired, already used, revoked, and unknown all read the same, so the
+        # response cannot be used to learn which guesses were close.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This reset link is invalid or has expired",
+        ) from None
+    except PasswordPolicyError as exc:
+        # Thrown before anything is committed, so the token stays unconsumed and
+        # the person can retry with the same link.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    await db.commit()
+    return PasswordResetCompletedResponse(sessions_revoked=result.sessions_revoked)
