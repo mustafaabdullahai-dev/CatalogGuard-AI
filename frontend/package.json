@@ -1,0 +1,28 @@
+{
+  "name": "catalogguard-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3000",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "next": "16.3.8",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.13.1",
+    "@types/react": "19.2.0",
+    "@types/react-dom": "19.2.0",
+    "@vitejs/plugin-react": "5.1.0",
+    "eslint": "^9.39.2",
+    "eslint-config-next": "^16.3.8",
+    "typescript": "5.7.2",
+    "vitest": "3.2.4"
+  }
+}
