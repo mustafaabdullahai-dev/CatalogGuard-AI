@@ -370,6 +370,11 @@ class SourceRecord(SoftDeletableTenantEntity):
     sequence_timestamp: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Set once the record has been folded into a canonical product (Phase 11).
+    # NULL means "not yet canonicalized", which is what makes the pass idempotent:
+    # a re-run selects only the rows that have no product yet, so re-uploading the
+    # same feed cannot duplicate a catalog.
+    product_id: Mapped[UUID | None] = mapped_column(nullable=True)
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -378,10 +383,17 @@ class SourceRecord(SoftDeletableTenantEntity):
             name="fk_source_records_workspace_source",
             ondelete="CASCADE",
         ),
+        ForeignKeyConstraint(
+            ["workspace_id", "product_id"],
+            ["products.workspace_id", "products.id"],
+            name="fk_source_records_workspace_product",
+            ondelete="SET NULL",
+        ),
         UniqueConstraint(
             "workspace_id", "catalog_source_id", "external_id", name="uq_source_record"
         ),
         Index("ix_source_records_workspace_source", "workspace_id", "catalog_source_id"),
+        Index("ix_source_records_workspace_product", "workspace_id", "product_id"),
         {"comment": "Raw ingested record, pre-normalization"},
     )
 

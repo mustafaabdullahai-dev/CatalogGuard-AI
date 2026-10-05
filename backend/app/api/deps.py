@@ -205,3 +205,47 @@ def require_approval_authority() -> Callable[[TenantScope], Awaitable[TenantScop
 def require_workspace_admin() -> Callable[[TenantScope], Awaitable[TenantScope]]:
     """This endpoint administers a workspace: members, roles, configuration."""
     return require_capability("admin")
+
+
+def require_ingestion_authority() -> Callable[[TenantScope], Awaitable[TenantScope]]:
+    """This endpoint ingests raw catalog data (Phase 10, §49).
+
+    Resolves to the `write` capability today: uploading a supplier file creates
+    `source_records`, which is catalog mutation and belongs to whoever may write
+    catalog data.
+
+    OPEN DECISION. An alternative reading is that ingestion is an integration
+    activity and should require `configure_sources`, which only the data
+    integration admin (D-004) holds -- but that role deliberately cannot write,
+    so gating on it would let the integration admin ingest data they are barred
+    from approving while barring the ops manager from their own feed. Named as a
+    single dependency so the answer is a one-line change and one grep, not a
+    policy scattered across handlers.
+    """
+    return require_capability("write")
+
+
+def require_reconciliation_authority() -> Callable[[TenantScope], Awaitable[TenantScope]]:
+    """This endpoint runs or reads a reconciliation pass (Phase 12).
+
+    Gated on `write`, not `resolve_conflicts`. Running a pass *creates* conflicts
+    and proposals — it is analysis that writes rows, and both the ops manager and
+    the data steward hold `write` (D-003). `resolve_conflicts` is reserved for
+    the act of *deciding* a conflict (Phase 18), which the integration admin must
+    never be able to do; keeping the two separate is what makes that distinction
+    enforceable rather than merely intended.
+    """
+    return require_capability("write")
+
+
+def require_catalog_authority() -> Callable[[TenantScope], Awaitable[TenantScope]]:
+    """This endpoint reads or builds the canonical catalog (Phase 11).
+
+    Reads are gated by `write` here even though a read normally needs only
+    `read`, because the one mutating route on this router
+    (`/catalog-sources/{id}/canonicalize`) creates products. Splitting read and
+    write into two dependencies for four routes would add a name without adding
+    a decision; if product reads ever need a separate grant, `read` is the change
+    and this is the single place to make it.
+    """
+    return require_capability("write")
