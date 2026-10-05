@@ -148,11 +148,57 @@ class Settings(BaseSettings):
     upload_dir: str = "./uploads"
     max_upload_mb: int = 100
 
+    # Catalog ingestion (Phase 10, §49).
+    #
+    # CSV, JSON and Excel are parsed in process. XML and PDF are deliberately
+    # absent until a parser is chosen: a parser is the most dangerous component
+    # in an intake path, and `defusedxml` / a PDF extractor are not installed.
+    # Accepting a format nothing can read would create a source with zero rows
+    # and no explanation; refusing the extension is the honest behaviour.
+    ingestion_allowed_extensions: Annotated[list[str], NoDecode] = [
+        ".csv",
+        ".json",
+        ".xlsx",
+    ]
+    # Files at or below this are parsed inline; larger ones are handed to the
+    # Dramatiq worker (§28) -- but only when INGESTION_EXECUTION is `dramatiq`.
+    ingestion_inline_max_bytes: int = 5 * 1024 * 1024
+    # `inline` keeps the whole pipeline inside the request, which is honest for
+    # the current deployment: no worker is running. `dramatiq` enqueues oversized
+    # files and requires a live broker.
+    ingestion_execution: Literal["inline", "dramatiq"] = "inline"
+    # Structural caps. Rows truncate with a warning; columns abort, because a
+    # file with more columns than this is a different file than the one expected.
+    ingestion_max_rows: int = 200_000
+    ingestion_max_columns: int = 512
+    # §49 lists a security check. No anti-malware engine is deployed, so the
+    # default reports `none` rather than implying a scan happened.
+    ingestion_scanner: Literal["none"] = "none"
+    # A CSV cell beginning with `=`, `+`, `-` or `@` can execute as a formula when
+    # a reviewer opens an export. Neutralised unless it is a bare signed number.
+    ingestion_neutralize_formulas: bool = True
+
+    # Compliance RAG (Phases 13–14, §13/§14, D-006).
+    #
+    # `none` stores chunks WITHOUT vectors, so retrieval degrades to keyword and
+    # metadata evidence instead of returning fabricated similarity. `qroq` needs a
+    # live key and pgvector on Neon -- neither is confirmed -- so `none` is the
+    # honest default: un-indexed is knowable, fake-indexed is not.
+    rag_embedding_mode: Literal["none", "qroq"] = "none"
+    rag_chunk_max_chars: int = 1200
+    rag_chunk_overlap: int = 150
+    # Candidates fetched per signal before reranking. 50 keeps each pass a single
+    # indexed lookup while leaving enough room for a weak keyword pass to recover.
+    rag_retrieval_candidates: int = 50
+    rag_retrieval_results: int = 8
+
     # Cost control
     llm_cost_alert_enabled: bool = True
     llm_monthly_budget_usd: float = 0.0
 
-    @field_validator("cors_origins", "log_mask_keys", mode="before")
+    @field_validator(
+        "cors_origins", "log_mask_keys", "ingestion_allowed_extensions", mode="before"
+    )
     @classmethod
     def _split_csv(cls, v: object) -> object:
         """Accept comma-separated strings from env/.env.

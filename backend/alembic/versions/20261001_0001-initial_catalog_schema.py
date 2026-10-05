@@ -645,6 +645,8 @@ def upgrade() -> None:
         comment="Retrievable chunk; semantic plus keyword plus metadata",
     )
 
+    op.create_index("ix_chunks_embedding_hnsw", "compliance_chunks", ["embedding"])
+    op.create_index("ix_chunks_search_vector", "compliance_chunks", ["search_vector"])
     op.create_index(
         "ix_chunks_workspace_document", "compliance_chunks", ["workspace_id", "document_id"]
     )
@@ -870,53 +872,6 @@ def upgrade() -> None:
         "ix_runs_workspace_catalog_time",
         "reconciliation_runs",
         ["workspace_id", "catalog_id", "started_at"],
-    )
-
-    # --------------------------------------------------------------------
-    # source_records
-    # Raw ingested record, pre-normalization
-    # --------------------------------------------------------------------
-    op.create_table(
-        "source_records",
-        sa.Column("catalog_source_id", sa.Uuid(), nullable=False),
-        sa.Column("external_id", sa.String(length=255), nullable=False),
-        sa.Column("raw_data", sa.JSON(), nullable=False),
-        sa.Column("sequence_timestamp", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("id", sa.UUID(), nullable=False),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
-            nullable=False,
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
-            nullable=False,
-        ),
-        sa.Column("workspace_id", sa.UUID(), nullable=False),
-        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["workspace_id", "catalog_source_id"],
-            ["catalog_sources.workspace_id", "catalog_sources.id"],
-            name="fk_source_records_workspace_source",
-            ondelete="CASCADE",
-        ),
-        sa.PrimaryKeyConstraint("id", name=op.f("pk_source_records")),
-        sa.UniqueConstraint(
-            "workspace_id", "catalog_source_id", "external_id", name="uq_source_record"
-        ),
-        sa.UniqueConstraint("workspace_id", "id", name=op.f("uq_source_records_workspace_id_id")),
-        comment="Raw ingested record, pre-normalization",
-    )
-
-    op.create_index("ix_source_records_deleted_at", "source_records", ["deleted_at"])
-    op.create_index("ix_source_records_workspace_id", "source_records", ["workspace_id"])
-    op.create_index(
-        "ix_source_records_workspace_source",
-        "source_records",
-        ["workspace_id", "catalog_source_id"],
     )
 
     # --------------------------------------------------------------------
@@ -1396,6 +1351,63 @@ def upgrade() -> None:
     op.create_index("ix_product_versions_workspace_id", "product_versions", ["workspace_id"])
 
     # --------------------------------------------------------------------
+    # source_records
+    # Raw ingested record, pre-normalization
+    # --------------------------------------------------------------------
+    op.create_table(
+        "source_records",
+        sa.Column("catalog_source_id", sa.Uuid(), nullable=False),
+        sa.Column("external_id", sa.String(length=255), nullable=False),
+        sa.Column("raw_data", sa.JSON(), nullable=False),
+        sa.Column("sequence_timestamp", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("product_id", sa.Uuid(), nullable=True),
+        sa.Column("id", sa.UUID(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column("workspace_id", sa.UUID(), nullable=False),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.ForeignKeyConstraint(
+            ["workspace_id", "catalog_source_id"],
+            ["catalog_sources.workspace_id", "catalog_sources.id"],
+            name="fk_source_records_workspace_source",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["workspace_id", "product_id"],
+            ["products.workspace_id", "products.id"],
+            name="fk_source_records_workspace_product",
+            ondelete="SET NULL",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_source_records")),
+        sa.UniqueConstraint(
+            "workspace_id", "catalog_source_id", "external_id", name="uq_source_record"
+        ),
+        sa.UniqueConstraint("workspace_id", "id", name=op.f("uq_source_records_workspace_id_id")),
+        comment="Raw ingested record, pre-normalization",
+    )
+
+    op.create_index("ix_source_records_deleted_at", "source_records", ["deleted_at"])
+    op.create_index("ix_source_records_workspace_id", "source_records", ["workspace_id"])
+    op.create_index(
+        "ix_source_records_workspace_product", "source_records", ["workspace_id", "product_id"]
+    )
+    op.create_index(
+        "ix_source_records_workspace_source",
+        "source_records",
+        ["workspace_id", "catalog_source_id"],
+    )
+
+    # --------------------------------------------------------------------
     # workspace_invitations
     # Single-use workspace invitations with a bound role
     # --------------------------------------------------------------------
@@ -1859,6 +1871,7 @@ def downgrade() -> None:
         "approval_requests",
         "workspace_memberships",
         "workspace_invitations",
+        "source_records",
         "product_versions",
         "product_relationships",
         "product_identifiers",
@@ -1867,7 +1880,6 @@ def downgrade() -> None:
         "change_proposals",
         "workspaces",
         "tool_calls",
-        "source_records",
         "reconciliation_runs",
         "products",
         "password_reset_tokens",

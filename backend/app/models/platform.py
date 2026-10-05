@@ -148,6 +148,11 @@ class ComplianceChunk(SoftDeletableTenantEntity):
         ),
         UniqueConstraint("workspace_id", "document_id", "chunk_index", name="uq_chunk_index"),
         Index("ix_chunks_workspace_document", "workspace_id", "document_id"),
+        # Both retrieval indexes are declared once, here. This class previously
+        # carried a second `__table_args__` block, which silently replaced this
+        # one and dropped the GIN and HNSW indexes from both the model and the
+        # generated migration -- leaving hybrid retrieval correct but running as
+        # a sequential scan over every chunk in the workspace.
         Index("ix_chunks_search_vector", "search_vector", postgresql_using="gin"),
         Index(
             "ix_chunks_embedding_hnsw",
@@ -155,18 +160,6 @@ class ComplianceChunk(SoftDeletableTenantEntity):
             postgresql_using="hnsw",
             postgresql_with={"m": 16, "ef_construction": 64},
         ),
-        {"comment": "Retrievable chunk; semantic plus keyword plus metadata"},
-    )
-
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["workspace_id", "document_id"],
-            ["compliance_documents.workspace_id", "compliance_documents.id"],
-            name="fk_chunks_workspace_document",
-            ondelete="CASCADE",
-        ),
-        UniqueConstraint("workspace_id", "document_id", "chunk_index", name="uq_chunk_index"),
-        Index("ix_chunks_workspace_document", "workspace_id", "document_id"),
         {"comment": "Retrievable chunk; semantic plus keyword plus metadata"},
     )
 
