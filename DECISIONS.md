@@ -882,3 +882,240 @@ Yes. Callers depend on `MailDelivery`, never on a provider. The queued row, its
   single-use belong in the only store that can enforce it atomically.
 - **Throttling resets through the login limiter.** One shared counter turns a
   safety feature into a remote lockout.
+
+---
+
+## D-018 — Catalog Ingestion: Local Formats, a Sync/Async Seam, and Raw-Only Storage
+
+**Status:** Implemented (Phase 10). The async worker is unverified — no live Redis.
+
+### Decision
+
+Ingestion (§49, Phase 10) accepts **CSV, JSON and Excel (.xlsx)** only. A file at
+or below `INGESTION_INLINE_MAX_BYTES` is parsed inside the request; a larger file is
+handed to a Dramatiq worker (§28) **only when `INGESTION_EXECUTION=dramatiq`**,
+which defaults to `inline`. The pipeline writes **raw `source_records` and nothing
+else** — normalization into canonical products is Phase 11, a separate pass. The
+file-security step is deterministic (extension allowlist, magic bytes, size cap,
+binary refusal, CSV formula neutralisation, row and column caps) plus a pluggable
+scanner port whose default adapter reports `none` and says so.
+
+### Context
+
+§49 lists CSV, Excel, JSON, XML, PDF, API and marketplace feeds, and requires the
+validation, security-check, parsing, schema-detection, normalization, validation,
+canonical-mapping and storage stages, with large files handled asynchronously
+(§28). None of it existed: `catalog_sources` and `source_records` were defined in
+the ORM with no write path at all.
+
+### Rationale
+
+- **XML and PDF are excluded, not forgotten.** Neither `defusedxml` nor a PDF
+  extractor is installed, and a parser is the most dangerous component in an intake
+  path. Accepting a format nothing can read produces a source with zero rows and no
+  explanation; a 415 does not. The extension allowlist is configuration, so adding
+  a format is one setting plus one adapter.
+- **Raw-only storage is the replay guarantee.** §50 requires that every finding be
+  re-derivable against the catalog state it observed. If ingestion normalized as it
+  stored, a change to the alias table would silently orphan every earlier decision.
+  Keeping the record verbatim means normalization can be re-run without re-upload.
+- **The sync/async decision is a pure function.** `plan_execution(size)` isolates
+  the boundary, so it is testable with no broker. Defaulting to `inline` is honest
+  while no worker runs: a queue with no consumer would make an upload look accepted
+  and never processed.
+- **The scanner port mirrors `MailDelivery` (D-017).** The seam is real; the adapter
+  admits it does not scan. A "clean" that implies a scan happened would be worse
+  than no scanner.
+
+### Trade-offs accepted
+
+- **No XML or PDF yet.** A real requirement is unserved until a parser decision is
+  made — stated rather than hidden behind an extension that fails at parse time.
+- **`inline` can hold a request open.** A 90 MB CSV parses in-request unless
+  `dramatiq` is configured. Bounded by `MAX_UPLOAD_MB`, and the seam to move it
+  exists.
+- **Rows truncate, columns abort.** `INGESTION_MAX_ROWS` truncates with a warning
+  (large catalogs are legitimate); `INGESTION_MAX_COLUMNS` refuses the file (more
+  columns than expected is a different file, not a bigger one).
+- **The worker is unverified.** No Redis is reachable, so the async path is
+  exercised through unit tests of the functions it calls, not end to end.
+
+### Open decision
+
+Which capability gates ingestion. Resolved to `write` today and concentrated in
+`require_ingestion_authority()`, because uploading a supplier file creates catalog
+rows. The competing reading — that ingestion is an integration activity for the data
+integration admin (D-004) — is recorded in that dependency's docstring. One line to
+change either way.
+
+### Alternatives rejected
+
+- **Normalize during ingestion.** Fast, and it destroys the ability to replay a
+  finding against the data it was drawn from.
+- **Accept every §49 format now.** A parser for a format nothing reads is an attack
+  surface with no user.
+- **A real ClamAV integration in this phase.** Requires a daemon that is not
+  deployed; the port is the part that survives either way.
+- **All-async ingestion.** Needs a live broker, and it would make the feature
+  unverifiable until Redis exists.
+
+---
+
+## D-019 — Canonical Product Model: Capture, Not Reconcile
+
+**Status:** Implemented (Phase 11).
+
+### Decision
+
+Phase 11 turns raw `source_records` into canonical `products`:
+
+- A pass maps each record through `normalize_record`, reduces it to an identity
+  question, and runs `resolve_identity`.
+- **Only an exact identifier match auto-links** (D-015). A fuzzy or strong-text
+  match still creates a product, and the pair is recorded as an
+  `IDENTITY_MISMATCH` conflict carrying its confidence and evidence.
+- A record whose SKU already exists in the workspace is linked to that product
+  rather than inserted, and is flagged as a `sku_collision` conflict.
+- Products are created **`active`**, with a **v1 `product_versions` snapshot** in
+  the same transaction.
+- A workspace's **Default catalog** is created idempotently on first use, because
+  `products.catalog_id` is NOT NULL and nothing created a catalog before.
+- `source_records.product_id` (new nullable column, migration regenerated from the
+  ORM) records which product a record folded into. **NULL means "not canonicalized
+  yet", which is what makes the pass idempotent.**
+- **Cross-source field resolution is deferred to Phase 12.** Each source is
+  captured exactly as it described itself.
+
+### Context
+
+§7–§10 ask for a canonical product model built from normalization, identity and
+relationships, with §50 requiring history that a finding can be replayed against.
+The model tables existed; nothing could write to them, because there was no
+`Catalog` and no path from a record to a product.
+
+### Rationale
+
+- **Capture-then-reconcile.** If the pass resolved disagreement while storing, a
+  product could never be captured in the state its source described, and Phase 12
+  would be reconciling an already-merged value — with no way to tell what each
+  source actually said. Keeping intake faithful is what makes reconciliation
+  explainable.
+- **Exact-identifier auto-link only.** A missed merge is a visible duplicate; a
+  wrong merge interleaves two products' histories permanently (D-015). Fuzzy
+  matches become conflicts, which is the same queue every other disagreement
+  already uses, so nothing new has to be taught to the UI.
+- **Idempotency needs provenance, not heuristics.** The alternative — detecting
+  "already canonicalized" by SKU — would either miss rows without a SKU or treat
+  SKU as identity, which D-015 explicitly rejects. A nullable `product_id` says it
+  directly and is useful afterwards: "which raw record produced this product" is
+  a question the diff view will ask.
+- **`status=active` at construction.** The column default is applied at flush, and
+  the v1 snapshot is written in the same transaction. Relying on the default would
+  have recorded `status: null` for a brand-new product, which reads as a defect.
+- **`active` rather than `draft`.** Ingestion captures catalogue state that
+  already exists; it does not publish a change. Drafting would hide a real
+  catalogue behind a moderation state it was never submitted to.
+
+### Trade-offs accepted
+
+- **A SKU collision is linked, not rejected.** Two sources legitimately sharing a
+  SKU must map to one product or the insert fails on `uq_products_workspace_sku`.
+  Linking is the only non-erroring option, so it is linked and flagged for a
+  human rather than merged silently.
+- **Blocking uses only identity columns and brand.** Title-only blocking is not
+  attempted in SQL. Since only exact identifiers can auto-link, extra recall could
+  not change the decision, and a first-token `LIKE` would scan on large catalogs.
+- **`product_id` is `ON DELETE SET NULL`.** Deleting a product returns its records
+  to "not canonicalized". That is the correct direction: they must be re-resolved
+  rather than left pointing at nothing.
+- **The pass has not run against a live database.** Unit-tested offline only.
+
+### Alternatives rejected
+
+- **Normalize into products during ingestion.** Destroys replay, and makes a
+  later alias-table change silently re-map history.
+- **Detecting "already processed" by SKU.** Either misses rows or treats SKU as
+  identity — the exact error D-015 exists to prevent.
+- **Adding a `merge_candidates` table.** A merge candidate *is* a disagreement
+  about identity, so it belongs in `conflicts`, which already has the type, the
+  confidence, the evidence and the approval path.
+- **Defer provenance to a later phase.** Without it the pass cannot be re-run
+  safely, and "re-run after fixing the mapping" is the normal operation of one.
+
+---
+
+## D-020 — Reconciliation: Authority Proposes, Risk Scores, Humans Decide
+
+**Status:** Implemented (Phase 12).
+
+### Decision
+
+- **Source authority uses the D-002 defaults.** §12 requires asking before
+  implementing the final logic, so the ladder was confirmed rather than assumed.
+  `workspace.source_authority_config` remains unread; wiring per-workspace
+  overrides is a deliberate next step.
+- **A run is scoped to one catalog** and records a `ReconciliationRun` bound to
+  `catalog_version`, so findings replay against the state they saw (§50).
+- **A conflict is always written; a proposal only when authority resolved and the
+  proposed value differs from the stored one.** A tie writes a conflict and no
+  proposal (§11), and a value that already matches never reaches the queue.
+- **Every proposal is `requires_approval=True` → `PENDING_APPROVAL`.** The risk
+  level decides *how many* approvers (Phase 18), never *whether* one exists.
+- **`validation_status` is `pending`** until the sandbox (Phase 17) has run.
+- **Re-runs supersede:** open conflicts and proposals for the same
+  (product, tracked field) are soft-deleted first. `APPROVED` and beyond are
+  never touched, so an approval is never overwritten.
+- **Conflicts do not store `resolved_value`/`resolved_by`/`resolved_at`.** The
+  authority's suggestion lives on the proposal; a conflict closes when a human
+  decides.
+
+### Context
+
+§11 (conflict detection), §12 (configurable source authority), §15 (change
+proposals) and §16 (deterministic risk) all had their logic implemented —
+`detect_field_conflicts`, `authority.resolve`, `risk.assess` — with **no writer
+anywhere**. Nothing created a `Conflict`, a `ChangeProposal`, a `RiskAssessment`
+or a `ReconciliationRun`, so the product's central claim was unimplemented.
+
+### Rationale
+
+- **Authority proposes; it does not decide.** §11 says the system "must not simply
+  select one". Recording the disagreement *and* a proposal keeps both: the queue
+  shows what is proposed, and the conflict keeps every competing value.
+- **Supersede rather than append.** Re-running a pass is the normal operation
+  after a mapping fix. Without supersede, every re-run would double the approval
+  queue — and a reviewer who clears a queue that instantly refills stops reading it.
+- **Confidence is clamped into (0, 1), never stored as 0 or 1.** The column is
+  CHECK-constrained for exactly that reason (§37): a 1.0 would read as certainty
+  and as permission to execute.
+- **`numeric_score` clamped to 100.** The CHECK allows 0..100 while the risk
+  engine sums weights up to 422. Nothing is lost: the band comes from the raw
+  total and every contributing factor is stored beside it, so the raw score is
+  recoverable.
+
+### Trade-offs accepted
+
+- **Workspace-specific ladders are not supported yet.** §12 explicitly allows a
+  business to have a different source of truth; until overrides are wired, every
+  workspace gets D-002's defaults.
+- **No `ApprovalRequest` rows yet.** Phase 12 writes the proposal with its risk
+  level; the approval gate that records *who* may approve is Phase 18. A pending
+  proposal therefore has no approver assigned until that phase exists.
+- **Products are processed in `limit` batches, not streamed.** A catalog larger
+  than the limit needs several runs; the run records what it analysed so the
+  partial pass is honest rather than silent.
+- **`build_observations` re-normalizes each record per run.** Correct but not
+  cached; profiling belongs with Phase 57 (performance), not here.
+
+### Alternatives rejected
+
+- **Auto-approving LOW-risk proposals.** §5 and §38 say humans approve. Deciding
+  that risk level *skips* a human is a policy for Phase 18 to argue for with data,
+  not for the engine to assume.
+- **Keeping conflicts and proposals in one table.** They answer different
+  questions — "do sources disagree" versus "should this value change" — and a tie
+  must be able to produce the first without the second.
+- **Marking conflicts resolved at authority time.** An algorithm would be closing
+  its own conflict before anyone saw it, which makes `resolved_at` meaningless.
+- **Per-product queries for run inputs.** N round trips on the path most likely to
+  hold hundreds of products; §57 forbids exactly this.

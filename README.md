@@ -9,11 +9,14 @@ simulates. Humans approve. Connectors execute. Logs remember.
 
 ## Current status
 
-**Phases 8–10: authentication, catalog domain, conflicts and risk.** Sign-in,
-tenant isolation, the catalog domain (normalization, identity, relationships,
-source authority), conflict detection, and deterministic risk scoring are
-complete and unit tested. Nothing has run against a live database or a live LLM
-provider yet.
+**Phases 8–12: authentication, catalog domain, conflicts, risk, ingestion, the
+canonical model and reconciliation.** Sign-in, tenant isolation, the catalog domain
+(normalization, identity, relationships, source authority), conflict detection,
+deterministic risk scoring, catalog ingestion (validation, CSV/JSON/Excel parsing,
+schema detection and raw storage), canonicalization (raw records → `products`,
+identifiers and v1 versions), and the reconciliation engine (source authority →
+conflicts → risk-scored change proposals) are complete and unit tested. Nothing has
+run against a live database or a live LLM provider yet.
 
 | Component | State |
 |---|---|
@@ -31,6 +34,14 @@ provider yet.
 | Source authority with per-field overrides; ties escalate (D-015) | Implemented, unit tested |
 | Conflict detection with available values, evidence and impact (§11) | Implemented, unit tested |
 | Deterministic risk scoring with weights and floors (D-016) | Implemented, unit tested |
+| Catalog ingestion: validation, CSV/JSON/Excel parsing, schema detection, raw storage (D-018) | Implemented, 44 tests |
+| Ingestion sync/async seam (Dramatiq worker) | Implemented; **unverified** — no live Redis |
+| Canonical product model: raw records → products, identifiers, v1 versions (D-019) | Implemented, 12 tests |
+| Catalog anchor (auto Default catalog per workspace) | Implemented, unit tested |
+| `source_records.product_id` provenance column (migration regenerated) | Implemented, parity tested |
+| Reconciliation engine: source authority → conflicts → risk-scored proposals (D-020) | Implemented, 12 tests |
+| Change proposals, risk assessments, runs | Implemented, unit tested |
+| Re-run supersede (no duplicate approval queue) | Implemented, unit tested |
 | RBAC guards and tenant binding wired to the session | Implemented, unit tested |
 | CSRF (signed double-submit) and security headers | Implemented, in-process tested |
 | Tenant isolation: composite FKs, tenant-scoped repository, RLS policies (D-011) | Implemented, unit tested |
@@ -266,8 +277,9 @@ approval authority (D-003), the integration-admin role (D-004), MVP scope (D-005
 vector store (D-006), LLM provider (D-007), job queue (D-008), database hosting
 (D-009), observability (D-010), tenant isolation (D-011), soft deletion and
 version history (D-012), append-only audit logs (D-013), authentication (D-014),
-the catalog domain (D-015), the risk engine (D-016), and account recovery and
-invitations (D-017).
+the catalog domain (D-015), the risk engine (D-016), account recovery and
+invitations (D-017), catalog ingestion (D-018), the canonical product model
+(D-019), and reconciliation (D-020).
 
 ---
 
