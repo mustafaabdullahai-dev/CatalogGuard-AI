@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.v1 import auth, brand, invitations
+from app.api.v1 import auth, brand, catalog, ingestion, invitations, reconciliation
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.middleware import CSRFMiddleware, SecurityHeadersMiddleware
@@ -56,6 +56,9 @@ def create_app() -> FastAPI:
     app.include_router(brand.router, prefix=settings.api_prefix)
     app.include_router(auth.router, prefix=settings.api_prefix)
     app.include_router(invitations.router, prefix=settings.api_prefix)
+    app.include_router(ingestion.router, prefix=settings.api_prefix)
+    app.include_router(catalog.router, prefix=settings.api_prefix)
+    app.include_router(reconciliation.router, prefix=settings.api_prefix)
 
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon() -> FileResponse:
