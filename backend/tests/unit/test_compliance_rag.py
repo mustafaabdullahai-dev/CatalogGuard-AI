@@ -19,9 +19,12 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.rag import embeddings
 from app.rag.chunking import chunk_text, estimate_tokens, keywords, split_sections
 from app.rag.embeddings import (
+    EMBEDDING_BATCH_SIZE,
     EMBEDDING_DIMENSION,
+    EmbeddingContractError,
     EmbeddingUnavailableError,
     NullEmbedder,
     embed_if_available,
@@ -101,6 +104,15 @@ class TestChunking:
         chunks = chunk_text(POLICY_TEXT)
         assert [chunk.index for chunk in chunks] == list(range(len(chunks)))
 
+    def test_a_section_title_is_inside_the_searchable_text(self) -> None:
+        """`section_reference` labels a citation; only `content` is indexed.
+
+        A query asking about "prohibited claims" has to match on the heading,
+        because the heading is not stored anywhere else the search reads.
+        """
+        chunks = chunk_text(POLICY_TEXT)
+        assert any("## Section 5.0 Prohibited claims" in chunk.content for chunk in chunks)
+
     def test_empty_text_produces_no_chunks(self) -> None:
         assert chunk_text("") == []
         assert chunk_text("   \n\n  ") == []
@@ -110,6 +122,31 @@ class TestChunking:
         chunks = chunk_text(long_section, max_chars=200, overlap=0)
         assert chunks
         assert all(len(chunk.content) <= 200 for chunk in chunks)
+
+    def test_carried_overlap_never_exceeds_max_chars(self) -> None:
+        """The overlap is context, not a licence to overflow the chunk.
+
+        A unit that just barely does not fit used to be re-issued with the
+        whole carried tail prepended, which could set a chunk well past
+        `max_chars` — retrieval truncates that silently, on precisely the rule
+        the overlap was there to protect.
+        """
+        chunks = chunk_text("a" * 190 + "\n\n" + "b" * 190, max_chars=200, overlap=100)
+        assert chunks
+        assert all(len(chunk.content) <= 200 for chunk in chunks)
+        assert chunks[1].content != "b" * 190  # the boundary was still carried
+
+    def test_oversized_paragraph_boundaries_carry_overlap(self) -> None:
+        """A paragraph split mid-sentence needs context as much as one that fits."""
+        sentence = "Rule text that must be preserved. " * 40
+        chunks = chunk_text(sentence, max_chars=200, overlap=50)
+        assert len(chunks) > 1
+        assert all(len(chunk.content) <= 200 for chunk in chunks)
+        assert chunks[1].content != sentence[:200]
+        # One long paragraph used to become one chunk *per sentence*: dozens of
+        # 33-character chunks that rank on their own and hold no rule. The
+        # pieces are repacked, so a chunk is still worth retrieving.
+        assert all(len(chunk.content) >= 150 for chunk in chunks)
 
     def test_overlap_cannot_exceed_half_the_chunk(self) -> None:
         """An overlap larger than the chunk would duplicate the whole chunk."""
@@ -123,16 +160,21 @@ class TestChunking:
     def test_a_heading_with_no_body_is_dropped(self) -> None:
         """A bare heading is a table of contents line, not a rule to cite."""
         chunks = chunk_text("# Title\n\n## Section 1\n\n## Section 2\n\nReal text.")
-        assert [chunk.content for chunk in chunks] == ["Real text."]
+        # The two bare headings produce no chunk: their entire content would be
+        # a title, which matches on every other title too. The heading that has
+        # a body travels *inside* its chunk, because `search_vector` reads only
+        # `content` and a section title is the phrase most likely to be searched.
+        assert [chunk.content for chunk in chunks] == ["## Section 2\n\nReal text."]
 
     def test_split_sections_keeps_preamble_content(self) -> None:
         sections = split_sections("Intro text.\n\n# Heading\n\nBody text.")
         assert sections[0][0] is None
         assert sections[0][1].strip() == "Intro text."
-        # Bodies keep the blank line that followed the heading; `chunk_text`
-        # strips it, so the assertion is on the stripped value.
+        # The heading line stays in the body: dropping it removed a line from
+        # the indexed text and left the section title unsearchable. The blank
+        # line is kept here; `chunk_text` strips it.
         assert sections[1][0] == "Heading"
-        assert sections[1][1].strip() == "Body text."
+        assert sections[1][1].strip() == "# Heading\n\nBody text."
 
     def test_section_style_without_markdown_is_recognised(self) -> None:
         """Marketplace help pages title rules "Section 12.3" without hashes."""
@@ -295,6 +337,76 @@ class TestEmbeddingPort:
                 return [[0.1] * 8 for _ in texts]
 
         assert await embed_if_available(Stub(), ["a"]) == [[0.1] * 8]
+
+    async def test_a_short_vector_batch_is_refused(self) -> None:
+        """One missing vector shifts every later vector onto the wrong chunk.
+
+        The rows would be written, look indexed, and rank text by a
+        neighbouring rule's embedding — with nothing in the response to say so.
+        """
+        class Stub:
+            name, model, dimension, available = "stub", "stub", 8, True
+
+            async def embed(self, texts):
+                return [[0.1] * 8 for _ in texts][:-1]
+
+        with pytest.raises(EmbeddingContractError, match="exactly one"):
+            await embed_if_available(Stub(), ["a", "b", "c"])
+
+    async def test_a_wrong_width_vector_is_refused(self) -> None:
+        """A model that stopped returning 1536 dims must not reach the column."""
+        class Stub:
+            name, model, dimension, available = "stub", "stub", 8, True
+
+            async def embed(self, texts):
+                return [[0.1] * 4 for _ in texts]
+
+        with pytest.raises(EmbeddingContractError, match="4-dimension"):
+            await embed_if_available(Stub(), ["a"])
+
+    async def test_embedding_requests_are_batched(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A whole policy document in one request fails on the input limit."""
+        sizes: list[int] = []
+
+        class FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict:
+                return {
+                    "data": [
+                        {"index": i, "embedding": [0.0] * EMBEDDING_DIMENSION}
+                        for i in range(sizes[-1])
+                    ]
+                }
+
+        class FakeClient:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                del args, kwargs
+
+            async def __aenter__(self) -> FakeClient:
+                return self
+
+            async def __aexit__(self, *args: object) -> None:
+                del args
+
+            async def post(self, url: str, *, headers: dict, json: dict) -> FakeResponse:
+                del url, headers
+                sizes.append(len(json["input"]))
+                return FakeResponse()
+
+        monkeypatch.setattr(embeddings.httpx, "AsyncClient", FakeClient)
+        provider = embeddings.QroqEmbeddingProvider(
+            api_key="key", base_url="https://example.test", model="embed", timeout=5
+        )
+        texts = [f"chunk {i}" for i in range(EMBEDDING_BATCH_SIZE + 1)]
+
+        vectors = await embed_if_available(provider, texts)
+
+        assert sizes == [EMBEDDING_BATCH_SIZE, 1]
+        assert len(vectors or []) == len(texts)
 
     def test_default_mode_is_the_honest_one(self) -> None:
         """No provider configured must mean no vectors, not fake ones (§67)."""

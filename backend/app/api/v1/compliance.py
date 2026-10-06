@@ -26,6 +26,7 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,6 +36,7 @@ from app.core.logging import get_logger
 from app.db.session import get_session
 from app.models.platform import ComplianceChunk, ComplianceDocument
 from app.rag import service
+from app.rag.embeddings import EmbeddingContractError
 from app.rag.repositories import ComplianceDocumentRepository
 from app.schemas.compliance import (
     ComplianceDocumentCreate,
@@ -85,6 +87,19 @@ async def add_compliance_document(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    except (httpx.HTTPError, EmbeddingContractError) as exc:
+        # An upstream that did not answer is not a client error and not a bug in
+        # this route: it is a dependency being unavailable, which 503 states.
+        # The wording also commits to "nothing was written", and that is checkable
+        # rather than hopeful — `ingest_document` embeds before it adds a row, and
+        # this handler has not committed.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "The embedding provider did not answer, so nothing was written "
+                f"and the document is not in the corpus. {exc}"
+            ),
         ) from exc
 
     await db.commit()
@@ -211,6 +226,15 @@ async def search_compliance(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    except (httpx.HTTPError, EmbeddingContractError) as exc:
+        # The keyword pass would still have answered, so falling back was an
+        # option — but a ranking that quietly lost its semantic half is an
+        # outage nobody is told about, and this router's job is to state what
+        # actually happened (§67).
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"The embedding provider did not answer, so no results. {exc}",
         ) from exc
 
     note = (

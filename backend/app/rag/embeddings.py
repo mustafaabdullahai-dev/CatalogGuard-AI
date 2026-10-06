@@ -31,9 +31,26 @@ logger = get_logger(__name__)
 # dimension means a migration, so it is a constant rather than a setting.
 EMBEDDING_DIMENSION = 1536
 
+# One request per batch. A policy document is hundreds of chunks, and a single
+# request carrying all of them fails on the provider's input limit — taking the
+# whole ingest down with it instead of the one batch that was too large.
+EMBEDDING_BATCH_SIZE = 64
+
 
 class EmbeddingUnavailableError(RuntimeError):
     """Raised when a caller asks for vectors without a configured provider."""
+
+
+class EmbeddingContractError(RuntimeError):
+    """The provider returned something that cannot be stored as a vector.
+
+    Count and width are the two ways an answer can be unusable, and neither
+    announces itself at the point of failure. A wrong *count* misaligns every
+    vector with its chunk — an off-by-one that leaves real text permanently
+    ranked by a neighbouring rule, with nothing in the response to notice. A
+    wrong *width* fails at insert, or lands in a column that does not check and
+    answers garbage. Both are caught here, beside the call that produced them.
+    """
 
 
 @runtime_checkable
@@ -109,21 +126,19 @@ class QroqEmbeddingProvider:
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:
             return []
+        vectors: list[list[float]] = []
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            response = await client.post(
-                self._url,
-                headers=self._headers,
-                json={"model": self.model, "input": list(texts)},
-            )
-            response.raise_for_status()
-            payload = response.json()
-
-        data = sorted(payload["data"], key=lambda item: item["index"])
-        vectors = [item["embedding"] for item in data]
-        if len(vectors) != len(texts):
-            raise EmbeddingUnavailableError(
-                f"provider returned {len(vectors)} vectors for {len(texts)} inputs"
-            )
+            for start in range(0, len(texts), EMBEDDING_BATCH_SIZE):
+                batch = list(texts[start : start + EMBEDDING_BATCH_SIZE])
+                response = await client.post(
+                    self._url,
+                    headers=self._headers,
+                    json={"model": self.model, "input": batch},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                data = sorted(payload["data"], key=lambda item: item["index"])
+                vectors.extend(item["embedding"] for item in data)
         return vectors
 
 
@@ -152,8 +167,9 @@ async def embed_if_available(
 ) -> list[list[float]] | None:
     """Vectors for `texts`, or None when no provider can produce them.
 
-    The only caller-facing contract: `None` means "store unindexed and say so",
-    never "pretend it worked".
+    The only caller-facing contract, and the last place a broken answer can be
+    caught: one vector per input, each of the declared width. Anything else is
+    stored as if it were indexed and answers as if it were understood.
     """
     if not provider.available:
         logger.info(
@@ -163,4 +179,20 @@ async def embed_if_available(
             reason="no embedding provider configured",
         )
         return None
-    return await provider.embed(texts)
+
+    vectors = await provider.embed(texts)
+    if len(vectors) != len(texts):
+        raise EmbeddingContractError(
+            f"{provider.name}/{provider.model} returned {len(vectors)} vectors "
+            f"for {len(texts)} inputs; every input needs exactly one, in order, "
+            "or vectors end up attached to the wrong chunks"
+        )
+    for position, vector in enumerate(vectors):
+        if len(vector) != provider.dimension:
+            raise EmbeddingContractError(
+                f"{provider.name}/{provider.model} returned a {len(vector)}-"
+                f"dimension vector for input {position}; the column holds "
+                f"{provider.dimension} and a mismatch would fail the write far "
+                "from the model that produced it"
+            )
+    return vectors

@@ -10,11 +10,15 @@ reviewer, and a chunk spanning three rules will be cited for the wrong one.
 Three properties the splitter guarantees:
 
   - **Headings survive.** Every chunk carries the section reference it came from,
-    which is what `compliance_chunks.section_reference` exists to hold.
+    which is what `compliance_chunks.section_reference` exists to hold, and the
+    heading line stays inside `content` so the section title is findable —
+    `search_vector` reads `content` alone.
   - **Paragraphs are not torn.** Units are packed whole when they fit; only a
     single oversized paragraph is split further, by sentence and then by hard wrap.
-  - **Overlap is bounded.** A carried prefix lets a rule that straddles a boundary
-    still be matched, without re-reading the whole document into every chunk.
+  - **Overlap is bounded, and so is every chunk.** A carried prefix lets a rule
+    that straddles a boundary still be matched, without re-reading the whole
+    document into every chunk — and the prefix is budgeted against `max_chars`,
+    so carrying context can never be what makes a chunk too large.
 
 Chosen as a fixed, reasoned algorithm rather than a splitter library: the inputs
 are policy documents and marketplace rule sets, not code, and a committed
@@ -82,6 +86,14 @@ def split_sections(text: str) -> list[tuple[str | None, str]]:
 
     A heading is attached to the section that follows it, so the reference is
     never a chunk of its own and never lost — it labels the content it heads.
+
+    The heading line also *stays in the body*. `section_reference` is a label
+    for a citation; it is not searched — `search_vector` is built from `content`
+    alone — so dropping the line would make a section title unfindable by the
+    query most likely to be asked about it.
+
+    A heading with nothing under it is still dropped: a chunk whose entire
+    content is a title matches on every other title too.
     """
     sections: list[tuple[str | None, str]] = []
     current_ref: str | None = None
@@ -93,17 +105,30 @@ def split_sections(text: str) -> list[tuple[str | None, str]]:
             buffer.append(line)
             continue
         if buffer:
-            body = "\n".join(buffer)
-            if body.strip():
-                sections.append((current_ref, body))
-            buffer = []
+            _append_section(sections, current_ref, buffer)
+        buffer = [line]
         current_ref = reference
 
     if buffer:
-        body = "\n".join(buffer)
-        if body.strip():
-            sections.append((current_ref, body))
+        _append_section(sections, current_ref, buffer)
     return sections
+
+
+def _append_section(
+    sections: list[tuple[str | None, str]], ref: str | None, buffer: list[str]
+) -> None:
+    """Append a buffered section if it says anything at all.
+
+    `buffer[0]` is the heading when `ref` is set, because the buffer starts at
+    the line that produced the reference — so "everything after the heading" is
+    exactly `buffer[1:]`.
+    """
+    body = "\n".join(buffer)
+    if not body.strip():
+        return
+    if ref is not None and not any(line.strip() for line in buffer[1:]):
+        return
+    sections.append((ref, body))
 
 
 def _paragraphs(body: str) -> list[str]:
@@ -111,19 +136,47 @@ def _paragraphs(body: str) -> list[str]:
     return [part.strip() for part in re.split(r"\n\s*\n", body) if part.strip()]
 
 
-def _split_oversized(unit: str, max_chars: int) -> list[str]:
-    """Break a single unit that cannot fit: sentences first, then hard wrap."""
+def _carry_tail(current: str, unit: str, max_chars: int, overlap: int) -> str:
+    """Start `unit` with a budgeted tail of `current`, or just `unit`.
+
+    The tail is the overlap — the reason a rule that straddles a boundary is
+    still matchable. It is also the reason a chunk can exceed `max_chars` if
+    left unbounded, and an oversized chunk is not a small defect: retrieval
+    returns what fits and an embedding provider rejects what does not, so the
+    overflow would be either silently truncated or a failed ingest.
+    """
+    if not current or not overlap:
+        return unit
+    budget = max_chars - len(unit) - 1  # the "\n" join
+    if budget < 1:
+        return unit
+    return f"{current[-min(overlap, budget):]}\n{unit}"
+
+
+def _split_oversized(unit: str, max_chars: int, overlap: int) -> list[str]:
+    """Break a single unit that cannot fit: sentences first, then hard wrap.
+
+    The resulting pieces are *repacked* rather than emitted one per sentence. A
+    sentence is far smaller than a chunk, so emitting each on its own would turn
+    one long paragraph into dozens of near-empty chunks — small enough to rank
+    on their own, too small to hold the rule they were split from. The repack
+    stops at `max_chars`, and because every fragment it receives is already
+    within that bound it cannot recurse.
+    """
     if len(unit) <= max_chars:
         return [unit]
 
-    pieces: list[str] = []
+    fragments: list[str] = []
     for sentence in _SENTENCE_RE.split(unit):
         while len(sentence) > max_chars:
-            pieces.append(sentence[:max_chars])
+            fragments.append(sentence[:max_chars])
             sentence = sentence[max_chars:]
         if sentence.strip():
-            pieces.append(sentence.strip())
-    return pieces
+            fragments.append(sentence.strip())
+    if not fragments:
+        return [unit[:max_chars]]
+
+    return _pack(fragments, max_chars=max_chars, overlap=overlap)
 
 
 def _pack(units: list[str], *, max_chars: int, overlap: int) -> list[str]:
@@ -138,7 +191,7 @@ def _pack(units: list[str], *, max_chars: int, overlap: int) -> list[str]:
             if current:
                 chunks.append(current)
                 current = ""
-            pieces = _split_oversized(unit, max_chars)
+            pieces = _split_oversized(unit, max_chars, overlap)
             chunks.extend(pieces[:-1])
             current = pieces[-1] if pieces else ""
             continue
@@ -149,8 +202,7 @@ def _pack(units: list[str], *, max_chars: int, overlap: int) -> list[str]:
             continue
 
         chunks.append(current)
-        tail = current[-overlap:] if overlap else ""
-        current = f"{tail}\n{unit}" if tail else unit
+        current = _carry_tail(current, unit, max_chars, overlap)
 
     if current:
         chunks.append(current)

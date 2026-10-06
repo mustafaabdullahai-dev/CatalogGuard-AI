@@ -473,3 +473,63 @@ class TestSearchNote:
         assert metadata.category_path == "Clothing > Shirts"
         assert metadata.document_kind is None
         assert metadata.effective_on is None
+
+
+class TestProviderFailure:
+    """An upstream that did not answer is a 503 — not a 500, and not a 201.
+
+    A provider outage is the one failure on this router that is neither the
+    caller's mistake nor a bug in the route. Returning 500 hides that behind a
+    generic server error, and returning 201 with unindexed chunks would claim
+    an ingest that did not complete.
+    """
+
+    @staticmethod
+    def _failure() -> httpx.HTTPStatusError:
+        request = httpx.Request("POST", "https://example.test/v1/embeddings")
+        return httpx.HTTPStatusError(
+            "embedding endpoint returned 502",
+            request=request,
+            response=httpx.Response(502, request=request),
+        )
+
+    async def test_ingest_returns_503_and_says_nothing_was_written(
+        self,
+        client: httpx.AsyncClient,
+        csrf,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        app.dependency_overrides.update(_override(UserRole.DATA_STEWARD.value))
+        monkeypatch.setattr(
+            rag_service, "ingest_document", AsyncMock(side_effect=self._failure())
+        )
+        try:
+            response = await client.post(
+                DOCUMENTS,
+                json=DOCUMENT_PAYLOAD,
+                headers={**await csrf(), "X-Workspace-Id": str(WORKSPACE)},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 503
+        assert "nothing was written" in response.json()["detail"]
+
+    async def test_search_returns_503_rather_than_a_partial_ranking(
+        self,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        app.dependency_overrides.update(_override(UserRole.DATA_STEWARD.value))
+        monkeypatch.setattr(rag_service, "search", AsyncMock(side_effect=self._failure()))
+        try:
+            response = await client.get(
+                SEARCH,
+                params={"q": "title limit"},
+                headers={"X-Workspace-Id": str(WORKSPACE)},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 503
+        assert "did not answer" in response.json()["detail"]
