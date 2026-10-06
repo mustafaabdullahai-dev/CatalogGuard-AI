@@ -239,22 +239,33 @@ def require_reconciliation_authority() -> Callable[[TenantScope], Awaitable[Tena
 
 
 def require_compliance_authority() -> Callable[[TenantScope], Awaitable[TenantScope]]:
-    """This endpoint reads or writes the compliance corpus (Phase 13, §13).
+    """This endpoint reads or writes the compliance corpus (Phase 13, §13, §14).
 
-    OPEN DECISION, same shape as `require_ingestion_authority` and with the same
-    one-line fix available: this currently resolves to `write`, on the reading
-    that adding a policy document and searching it is work a catalog manager or
-    the ops manager does as part of their job.
+    Decided in D-021: `write`, on all three routes.
 
-    The competing reading is that this is an integration activity, gated on
-    `configure_sources`, because the corpus is fed from marketplace documentation
-    — third-party policy text, not the tenant's own catalog data. Under D-004 that
-    capability belongs to the data integration admin, who deliberately cannot
-    approve anything, and routing corpus management there would keep third-party
-    content handling out of the hands of the people who approve changes.
+    The OPEN DECISION was `write` versus `configure_sources`, and it came down
+    to what the corpus *is*. §14 lists internal catalog policies, business rules
+    and historical catalog decisions alongside marketplace documentation, so
+    authorship spans text the tenant wrote itself and text it copied from a
+    marketplace. `configure_sources` belongs to the data integration admin
+    (D-004), who cannot write catalog data at all -- gating authorship there
+    would make an internal policy unwritable by anyone who actually owns
+    policy.
 
-    Neither reading is clearly right, so it is named rather than settled: the
-    answer is one line here plus one grep, not a policy scattered across handlers.
+    The separation-of-duties concern behind that alternative -- that a role
+    which can approve could author the evidence an approval cites -- is
+    recorded rather than dismissed. It is bounded by D-005 (no rule-cited
+    compliance decision in the MVP, so these documents supply evidence a human
+    weighs) and by D-013's append-only audit log, which records who added every
+    document. If that proves insufficient once approvals start citing the
+    corpus, this is one line plus one grep.
+
+    Reads are gated on `write` rather than `read` for the reason on
+    `require_catalog_authority`: one gate per router. The cost is named rather
+    than hidden -- the SEO specialist and the integration admin hold `read` and
+    cannot search the corpus, even though §13's citations are exactly the sort
+    of evidence those roles act on. Splitting retrieval out is the same
+    one-line change.
     """
     return require_capability("write")
 

@@ -16,8 +16,8 @@ engine in the MVP: these routes return evidence that a later phase will consume,
 and the UI must label early compliance findings as heuristic rather than
 authoritative.
 
-Which capability gates these routes is an OPEN DECISION, documented on
-`require_compliance_authority` below.
+All three routes are gated on `write` (D-021, resolved); the reasoning and the
+rejected alternative live on `require_compliance_authority`.
 """
 
 from __future__ import annotations

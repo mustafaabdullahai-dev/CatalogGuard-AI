@@ -166,10 +166,13 @@ class TestComplianceApi:
     async def test_roles_without_write_are_refused(
         self, client: httpx.AsyncClient, csrf
     ) -> None:
-        """`write` is the gate (OPEN DECISION on `require_compliance_authority`).
+        """The decided gate is `write` (D-021), not mere authentication.
 
         Both roles below hold `read` but not `write`, so a 403 here proves the
-        gate is the capability matrix rather than mere authentication.
+        gate is the capability matrix. The data integration admin is the case
+        that mattered when the decision was still open: it is the role that
+        *could* have held corpus authorship under `configure_sources`, and it
+        is refused here.
         """
         for role in (
             UserRole.SEO_SPECIALIST.value,

@@ -1158,8 +1158,10 @@ or a `ReconciliationRun`, so the product's central claim was unimplemented.
 - **This router returns evidence, never a verdict.** No rule-cited compliance
   decision (D-005); the search response says "Evidence for a recommendation,
   not a compliance decision" in words the UI can show as written.
-- **Gated on `write`** via `require_compliance_authority`, recorded as an OPEN
-  DECISION with the `configure_sources` alternative written out next to it.
+- **Gated on `write`** via `require_compliance_authority`, on all three routes.
+  The OPEN DECISION (`write` versus `configure_sources`) is resolved here and
+  the rejected alternative is argued in the dependency's docstring; the gate is
+  one named dependency so the answer stays a one-line change.
 - **No seeded corpus.** §68 ships seed documents as a separate task; nothing
   here is demo data.
 
@@ -1195,6 +1197,14 @@ document, embedded it, indexed it or searched it.
   guarantees into the database: a tenant predicate that lives only inside a
   query body is a predicate no test reaches. Compiling both statements and
   asserting the workspace id is in them is the offline version of that check.
+- **One gate, `write`, over both the marketplace half and the internally
+  authored half of the corpus.** `configure_sources` would have handed
+  authorship to a role that cannot write catalog data at all, which for §14's
+  internal policies and business rules means the policy owner cannot publish
+  their own policy. The concern the alternative addresses -- an approver
+  authoring the evidence their approval cites -- is bounded by D-005 (evidence,
+  never a verdict) and visible in D-013's audit log, and is written down on the
+  dependency so it can be revisited as a one-line change.
 
 ### Trade-offs accepted
 
