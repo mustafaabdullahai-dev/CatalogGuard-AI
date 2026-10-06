@@ -19,11 +19,13 @@ identifiers and v1 versions), the reconciliation engine (source authority →
 conflicts → risk-scored change proposals), compliance retrieval (chunked
 marketplace policy, hybrid keyword + vector search, citable evidence), and the
 agent graph (intake → normalize → analyze → finalize, with D-007's schema
-validation and bounded repair on every model call) are complete and unit
-tested — **781 tests**, plus two opt-in live-provider tests.
+validation and bounded repair on every model call), and four read-only agent
+tools the graph can call through a bounded tool loop (§23) are complete and
+tested — **814 tests**, of which three are opt-in live-provider tests.
 
-A live LLM provider **has** now been called: two real calls, fast and reasoning
-tier, validated against our schemas. Nothing has run against a live database.
+A live LLM provider **has** now been called three times: two schema-validated
+answers, fast and reasoning tier, plus a real tool call that resolved source
+authority for a GTIN. Nothing has run against a live database.
 Every phase's delivery, gates and gaps are recorded in
 [`docs/phases/`](docs/phases/README.md).
 
@@ -64,7 +66,8 @@ Every phase's delivery, gates and gaps are recorded in
 | Redis (Upstash) | **Verified live** — Redis 8.4.0, TLS required |
 | LLM (Qroq) | **Wired and live-verified** — fast (`openai/gpt-oss-20b`) and reasoning (`openai/gpt-oss-120b`) confirmed against the endpoint; key still needs rotation |
 | Agent graph (§7 roles, §24 state, D-007 validation layer) | Implemented, 12 unit tests + 2 opt-in live tests |
-| Agent tools, sandbox simulation | Not started |
+| Agent tools: normalize_field, resolve_source_authority, resolve_identity, assess_change_risk (§23) | Implemented, 30 tests + 1 opt-in live tool-call test; 4 of §23's 18 tools |
+| Sandbox simulation | Not started |
 | Frontend: dashboard, catalog explorer, approval center | Implemented, unit tested |
 | Outbound mail transport | Not configured; messages queue to `email_outbox` (D-017) |
 
@@ -143,8 +146,8 @@ Swagger UI at `http://localhost:3000/docs` when the frontend proxies, or
 ### Tests and lint
 
 ```bash
-python -m pytest -q                   # 781 tests, no database required
-CATALOGGUARD_LIVE_LLM=1 python -m pytest tests/agent -q   # opt-in: 2 live LLM calls
+python -m pytest -q                   # 811 passed, 3 skipped, no database required
+CATALOGGUARD_LIVE_LLM=1 python -m pytest tests/agent -q   # opt-in: 3 live LLM calls (2 schemas + 1 tool call)
 python -m ruff check app tests alembic scripts
 python -m mypy app
 ```

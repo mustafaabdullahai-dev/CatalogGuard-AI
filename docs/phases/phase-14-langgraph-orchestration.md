@@ -102,7 +102,8 @@ streaming seam exists; nothing is streaming through it.
 ## Gaps and honest limits
 
 - **No tool nodes.** `app/agents/tools/` is still empty: the graph reads its
-  state and proposes, and cannot call anything. Phase 15 gives it tools.
+  state and proposes, and cannot call anything. Phase 15 gives it tools — this
+  gap closed in `1cc3931`, four read-only tools of §23's eighteen.
 - **Nothing persists.** No run, proposal or usage record is written to a
   database. There is no run history to query and no id to query it by.
 - **The repair loop has never been triggered by a real model.** Its failure

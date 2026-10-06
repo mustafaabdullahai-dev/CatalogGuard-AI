@@ -424,9 +424,12 @@ marketplace listings. Telemetry must not leave our infrastructure.
   until an embedding provider exists, and D-005 still rules out a rule-cited
   compliance *decision* in the MVP: the UI must label findings as retrieved
   evidence rather than as authoritative verdicts.
-- **The agent graph has no tools and no HTTP surface.** Phase 14 delivers the
-  orchestration: `run_graph` is called by tests, nothing streams per-node
-  progress to a client, and no proposal it produces is persisted anywhere.
+- **The agent graph has four read-only tools and no HTTP surface.** Phase 14
+  delivers the orchestration and Phase 15 the tool layer (`app/agents/tools/`),
+  so the graph can call deterministic services — but `run_graph` is still only
+  called by tests, nothing streams per-node progress to a client, no proposal
+  it produces is persisted anywhere, and the lookups that would need a database
+  have no tool because D-006 still records the database as unconfirmed.
 - **Execution path is mock-only.** Real marketplace rate limits and
   partial-failure modes remain unvalidated.
 - **Dramatiq has no delayed-job scheduling.** Scheduled compliance scans will
