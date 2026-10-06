@@ -101,10 +101,12 @@ content, and each says why.
   Neon, `to_tsvector` has never run, the vector pass has never executed.
 - **pgvector is unconfirmed** (D-006). The `Vector(1536)` column and its HNSW
   index are generated, not proven to exist.
-- **No embedding provider has ever been called.** The Qroq key is a placeholder
-  in `.env.example`, and `qroq_embedding_model` is set to an OpenAI model name —
-  almost certainly not the id this provider wants. Both are unverified until a
-  live call runs.
+- **No embedding call has ever succeeded.** The Qroq key in `.env.example` is a
+  placeholder, and probing `/embeddings` with a live key returned
+  `model_not_found` for every candidate id — so as of `504009f`,
+  `qroq_embedding_model` defaults to empty and `RAG_EMBEDDING_MODE=qroq` is
+  refused at startup instead of failing at the first ingest. Retrieval runs
+  keyword-only until a provider that serves embeddings is configured.
 - **Migration index bug (found and fixed in `adabaf0`).** The generator dropped
   `postgresql_using`, so the GIN and HNSW indexes were being emitted as btree and
   would have failed at `alembic upgrade`. A mutation-checked regression test now

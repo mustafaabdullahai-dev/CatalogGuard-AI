@@ -2,15 +2,15 @@
 
 One document per phase in the §64 development process, plus an index here.
 
-**How these documents were written.** Phases 0–13 are complete; each page
+**How these documents were written.** Phases 0–14 are complete; each page
 records what that phase actually delivered, where the code lives, how it was
 verified, and what remains unverified. The pages for phases 0–13 were written
 retroactively on 2026-10-06 from the artifacts that survive — `DECISIONS.md`,
 the commits, the test suite and `docs/ARCHITECTURE.md` — because no
-contemporaneous phase log was kept. Nothing on those pages is claimed beyond
-what those artifacts show. Phases 14–29 are **not started**; their pages carry
-the §64 scope and the master-prompt sections that will drive them, and no
-delivery claims.
+contemporaneous phase log was kept; nothing on those pages is claimed beyond
+what those artifacts show. Phase 14 was written as it was built, in the same
+day. Phases 15–29 are **not started**; their pages carry the §64 scope and the
+master-prompt sections that will drive them, and no delivery claims.
 
 **Phase numbering is §64.** Where `DECISIONS.md` still labels D-014 through
 D-017 with an earlier local numbering (8 through 11), the mapping below is the
@@ -34,7 +34,7 @@ one to trust. D-018 onward already use §64 numbers.
 | [11](phase-11-canonical-product-model.md) | Canonical product model | Complete | D-019 |
 | [12](phase-12-reconciliation-engine.md) | Reconciliation engine | Complete | D-020 |
 | [13](phase-13-compliance-rag.md) | Compliance RAG | Complete | D-021 |
-| [14](phase-14-langgraph-orchestration.md) | LangGraph orchestration | Not started | — |
+| [14](phase-14-langgraph-orchestration.md) | LangGraph orchestration | Complete | D-004, D-007 |
 | [15](phase-15-ai-tools.md) | AI tools | Not started | — |
 | [16](phase-16-risk-engine.md) | Risk engine | Partially built | D-016 |
 | [17](phase-17-sandbox-simulation.md) | Sandbox simulation | Not started | — |
@@ -53,8 +53,10 @@ one to trust. D-018 onward already use §64 numbers.
 
 ## Phases to commits
 
-The suite is 764 tests, all in `backend/tests/unit`. `integration`, `agent`
-and `e2e` exist as directories and are empty.
+The suite is **781 tests**: 769 in `backend/tests/unit` and 12 in
+`backend/tests/agent`, plus 2 live-provider tests that run only when
+`CATALOGGUARD_LIVE_LLM=1` is set. `integration` and `e2e` exist as directories
+and are empty.
 
 | Phase | Commit |
 |---|---|
@@ -70,6 +72,8 @@ and `e2e` exist as directories and are empty.
 | 13 — compliance RAG, migration index fix | `adabaf0` |
 | 13 — compliance capability gate settled | `9e3483c` |
 | 13 — post-phase review fixes, this page set's phase-13 entry | `0b0a576` |
+| provider model-id correction (prerequisite for 14) | `504009f` |
+| 14 — LangGraph orchestration, D-007 validation layer | `6268cc0` |
 
 ## Work that §64 has no phase of its own for
 
