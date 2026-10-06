@@ -645,8 +645,16 @@ def upgrade() -> None:
         comment="Retrievable chunk; semantic plus keyword plus metadata",
     )
 
-    op.create_index("ix_chunks_embedding_hnsw", "compliance_chunks", ["embedding"])
-    op.create_index("ix_chunks_search_vector", "compliance_chunks", ["search_vector"])
+    op.create_index(
+        "ix_chunks_embedding_hnsw",
+        "compliance_chunks",
+        ["embedding"],
+        postgresql_using="hnsw",
+        postgresql_with={"ef_construction": 64, "m": 16},
+    )
+    op.create_index(
+        "ix_chunks_search_vector", "compliance_chunks", ["search_vector"], postgresql_using="gin"
+    )
     op.create_index(
         "ix_chunks_workspace_document", "compliance_chunks", ["workspace_id", "document_id"]
     )

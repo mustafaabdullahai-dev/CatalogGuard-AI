@@ -377,6 +377,47 @@ class TestIndexParity:
                 )
                 assert carried, f"{index.name} lost its WHERE clause in the migration"
 
+    def test_index_access_methods_survive_generation(
+        self, migration_source: str
+    ) -> None:
+        """`USING gin` / `USING hnsw` must travel with the index.
+
+        The generator once emitted only `unique` and the partial predicate, so
+        `ix_chunks_search_vector` was generated as btree. tsvector has no btree
+        opclass, so `alembic upgrade` would have failed on a live database --
+        and had it not, hybrid retrieval would have scanned every chunk in the
+        workspace instead of using the GIN index it exists to provide. An index
+        name check cannot see this, because the name survives either way.
+        """
+        for table in Base.metadata.tables.values():
+            for index in table.indexes:
+                pg = index.dialect_options["postgresql"]
+                using = pg.get("using")
+                if not using:
+                    continue
+
+                start = migration_source.find(f'"{index.name}"')
+                assert start != -1, f"{index.name} missing from migration"
+                end = migration_source.find("op.create_index", start + 1)
+                call = migration_source[start : end if end != -1 else None]
+
+                # Quote-agnostic: `ruff format` normalises the generated file
+                # to double quotes while `repr()` produces single ones.
+                carried = re.search(
+                    r"postgresql_using=(?P<q>[\"'])" + re.escape(str(using)) + r"(?P=q)",
+                    call,
+                )
+                assert carried, f"{index.name} lost USING {using} in the migration"
+                for key, value in sorted((pg.get("with") or {}).items()):
+                    option = re.search(
+                        rf"(?P<q>[\"']){re.escape(str(key))}(?P=q)\s*:\s*"
+                        rf"[\"']?{re.escape(str(value))}[\"']?",
+                        call,
+                    )
+                    assert option, (
+                        f"{index.name} lost its WITH option {key} in the migration"
+                    )
+
     def test_index_names_are_unique_across_the_migration(
         self, migration_source: str
     ) -> None:

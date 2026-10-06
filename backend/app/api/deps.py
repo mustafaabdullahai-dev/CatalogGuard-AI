@@ -238,6 +238,27 @@ def require_reconciliation_authority() -> Callable[[TenantScope], Awaitable[Tena
     return require_capability("write")
 
 
+def require_compliance_authority() -> Callable[[TenantScope], Awaitable[TenantScope]]:
+    """This endpoint reads or writes the compliance corpus (Phase 13, §13).
+
+    OPEN DECISION, same shape as `require_ingestion_authority` and with the same
+    one-line fix available: this currently resolves to `write`, on the reading
+    that adding a policy document and searching it is work a catalog manager or
+    the ops manager does as part of their job.
+
+    The competing reading is that this is an integration activity, gated on
+    `configure_sources`, because the corpus is fed from marketplace documentation
+    — third-party policy text, not the tenant's own catalog data. Under D-004 that
+    capability belongs to the data integration admin, who deliberately cannot
+    approve anything, and routing corpus management there would keep third-party
+    content handling out of the hands of the people who approve changes.
+
+    Neither reading is clearly right, so it is named rather than settled: the
+    answer is one line here plus one grep, not a policy scattered across handlers.
+    """
+    return require_capability("write")
+
+
 def require_catalog_authority() -> Callable[[TenantScope], Awaitable[TenantScope]]:
     """This endpoint reads or builds the canonical catalog (Phase 11).
 

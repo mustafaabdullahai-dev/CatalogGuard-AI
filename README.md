@@ -9,13 +9,16 @@ simulates. Humans approve. Connectors execute. Logs remember.
 
 ## Current status
 
-**Phases 8–12: authentication, catalog domain, conflicts, risk, ingestion, the
-canonical model and reconciliation.** Sign-in, tenant isolation, the catalog domain
+**Phases 8–13: authentication, catalog domain, conflicts, risk, ingestion, the
+canonical model, reconciliation and the compliance corpus.** Sign-in, tenant
+isolation, the catalog domain
 (normalization, identity, relationships, source authority), conflict detection,
 deterministic risk scoring, catalog ingestion (validation, CSV/JSON/Excel parsing,
 schema detection and raw storage), canonicalization (raw records → `products`,
-identifiers and v1 versions), and the reconciliation engine (source authority →
-conflicts → risk-scored change proposals) are complete and unit tested. Nothing has
+identifiers and v1 versions), the reconciliation engine (source authority →
+conflicts → risk-scored change proposals), and compliance retrieval (chunked
+marketplace policy, hybrid keyword + vector search, citable evidence) are
+complete and unit tested. Nothing has
 run against a live database or a live LLM provider yet.
 
 | Component | State |
@@ -24,7 +27,7 @@ run against a live database or a live LLM provider yet.
 | Python 3.13 venv + pinned dependencies | Installed |
 | Settings, logging, edge masking | Implemented, unit tested |
 | FastAPI app shell, `/health`, `/ready`, OpenAPI | Unit tested in-process |
-| ORM: 33 tables across tenancy, catalog, reconciliation, platform, compliance | Implemented, 623 tests |
+| ORM: 33 tables across tenancy, catalog, reconciliation, platform, compliance | Implemented, unit tested |
 | Email/password sign-in, Argon2id, server-side sessions (D-014) | Implemented, unit tested |
 | Password reset: single-use tokens, session revocation, outbox delivery (D-017) | Implemented, unit tested |
 | Workspace invitations: role bound at issue, admin-gated (D-017) | Implemented, unit tested |
@@ -42,6 +45,10 @@ run against a live database or a live LLM provider yet.
 | Reconciliation engine: source authority → conflicts → risk-scored proposals (D-020) | Implemented, 12 tests |
 | Change proposals, risk assessments, runs | Implemented, unit tested |
 | Re-run supersede (no duplicate approval queue) | Implemented, unit tested |
+| Compliance corpus: section-aware chunking, content-hash dedup (D-021) | Implemented, 52 tests |
+| Hybrid retrieval: GIN keyword `ts_rank` + pgvector cosine, deterministic rerank | Implemented, unit tested |
+| Compliance API: ingest / list / search with per-hit citations and a signal note | Implemented, 12 tests |
+| Embeddings: provider port with a null adapter | Implemented; **unverified** — no embedding provider configured |
 | RBAC guards and tenant binding wired to the session | Implemented, unit tested |
 | CSRF (signed double-submit) and security headers | Implemented, in-process tested |
 | Tenant isolation: composite FKs, tenant-scoped repository, RLS policies (D-011) | Implemented, unit tested |

@@ -1119,3 +1119,126 @@ or a `ReconciliationRun`, so the product's central claim was unimplemented.
   its own conflict before anyone saw it, which makes `resolved_at` meaningless.
 - **Per-product queries for run inputs.** N round trips on the path most likely to
   hold hundreds of products; §57 forbids exactly this.
+
+---
+
+## D-021 — Compliance RAG: Two Deterministic Passes, Cited as Evidence
+
+**Status:** Implemented (Phase 13).
+
+### Decision
+
+- **Hybrid retrieval with two independent passes** — `ts_rank` over a GIN
+  `tsvector` and cosine distance over a pgvector `HNSW` column — merged and
+  reranked by a deterministic function. No model call sits in the ranking path
+  (§14: "Avoid naïve vector-only retrieval").
+- **`search_vector` is a plain column filled after insert** by one
+  bound-parameter `UPDATE ... SET search_vector = to_tsvector('simple', content)`
+  scoped to (workspace, document). Index and query both use the `simple`
+  configuration, so the two can never disagree about stemming.
+- **`websearch_to_tsquery('simple', :q)`**, never `to_tsquery`: a user typing
+  `!` must be searching, not editing the query grammar.
+- **Section-aware chunking.** Markdown headings and `Section 12.3` style lines
+  become `section_reference` on every chunk, so a citation points at a rule
+  rather than at a paragraph. 1200 characters with 150 of overlap, token counts
+  recorded per chunk.
+- **Embeddings sit behind a Protocol with a null adapter.** With no provider
+  configured, `embedding` stays NULL, retrieval degrades to keyword plus
+  metadata, and every response names the signals that fired. A zero vector
+  would be a worse answer than an absent one.
+- **Idempotent ingest by content hash** (sha256 of the document text, unique
+  per workspace): a scheduled refetch of a marketplace's rules writes nothing
+  the second time.
+- **Metadata filters are pushed into SQL** — marketplace, country, document
+  type, rule type, version, category path, effective date — so a rule for the
+  wrong marketplace is never inside the candidate set to begin with.
+- **Both passes are built by pure functions** (`keyword_statement`,
+  `vector_statement`) whose compiled WHERE clauses the test suite asserts
+  offline, including the tenant predicate.
+- **This router returns evidence, never a verdict.** No rule-cited compliance
+  decision (D-005); the search response says "Evidence for a recommendation,
+  not a compliance decision" in words the UI can show as written.
+- **Gated on `write`** via `require_compliance_authority`, recorded as an OPEN
+  DECISION with the `configure_sources` alternative written out next to it.
+- **No seeded corpus.** §68 ships seed documents as a separate task; nothing
+  here is demo data.
+
+### Context
+
+§13 requires the AI to identify the exact rule or document section supporting a
+recommendation. §14 requires semantic search, keyword search, metadata
+filtering, hybrid retrieval and reranking over marketplace compliance,
+internal policies, specifications, manufacturer documentation, business rules
+and historical decisions — and explicitly rejects vector-only retrieval. D-006
+had already put `compliance_documents` / `compliance_chunks` with a `tsvector`
+and a `Vector(1536)` column in the schema, but nothing anywhere chunked a
+document, embedded it, indexed it or searched it.
+
+### Rationale
+
+- **Each pass covers the other's blind spot.** Exact identifiers — character
+  limits, category codes, section numbers, attribute rules — are what embedding
+  similarity handles worst, and they are what a compliance rule is mostly made
+  of. Paraphrase is what term matching handles worst ("limited-time offer"
+  versus "flash sale"). §14 asks for both for exactly this reason.
+- **Ranking must be checkable.** A reviewer being told "this rule supports the
+  change" needs to be able to see why it ranked first. A learned or model-based
+  reranker in the citation path would contradict "the LLM proposes,
+  deterministic code validates" and would cost a model call per search to add a
+  claim no human can audit.
+- **Signals travel with every hit.** §37's warning about confidence applies to
+  retrieval: a keyword match and a semantic match arrive looking identical in
+  JSON, and only one of them may be a coincidental exact-term overlap. The
+  response names the signals, and a keyword-only deployment says so in its
+  note rather than sounding equally sure.
+- **The pass builders are separate functions** for the reason D-013 pushes
+  guarantees into the database: a tenant predicate that lives only inside a
+  query body is a predicate no test reaches. Compiling both statements and
+  asserting the workspace id is in them is the offline version of that check.
+
+### Trade-offs accepted
+
+- **Rerank runs over a 50-candidate pool, not the whole corpus.** Correct for a
+  per-workspace policy corpus of a few hundred documents; a larger corpus needs
+  a real candidate-generation strategy, which belongs with Phase 57.
+- **The reranker is term overlap plus a phrase bonus blended with cosine
+  distance**, weighted for explainability rather than fitted on a labelled set.
+  Relevance has no measurement harness yet, so a "better" weighting would be an
+  opinion.
+- **`search_vector` is filled by an explicit UPDATE rather than a generated
+  column.** The fill is visible, scoped to one document, and assertable
+  offline. A computed `tsvector` column has not been exercised on this
+  ORM-plus-generator path and would move indexing behaviour into DDL the suite
+  does not inspect.
+- **No query log and no relevance feedback**, so nothing yet records whether
+  retrieval is getting better or worse.
+- **Embeddings are the untested path.** No embedding provider has ever been
+  run against this system; the null adapter is the path with coverage, and the
+  API reports which path was taken rather than implying otherwise.
+- **The initial migration's index access methods had to be corrected.** The
+  generator emitted only `unique` and a partial predicate, so the GIN and HNSW
+  indexes were written as plain btree — invisible to an index-name parity check
+  and fatal on `alembic upgrade` (neither `tsvector` nor `vector` has a btree
+  opclass). The generator now emits `using`, `with`, `ops`, `include`,
+  `concurrently` and `nulls_not_distinct`, and a test asserts the access method
+  survives generation.
+
+### Alternatives rejected
+
+- **Vector-only retrieval.** §14 forbids it, and the corpus is full of the
+  exact tokens it would miss.
+- **Keyword-only retrieval.** No paraphrase matching: a search for claims
+  language would fail whenever the wording differs, which is how prohibited
+  claims are usually worded differently from the rule that bans them.
+- **An LLM reranker.** A non-deterministic component underneath a product whose
+  promise is that the recommendation is checkable, bought at the cost of a model
+  call on every search.
+- **Embeddings in a JSON payload.** Not indexable — HNSW needs a typed vector
+  column — and metadata filtering must stay relational, which is D-006's whole
+  reason for putting vectors in the primary database.
+- **Applying metadata filters after retrieval.** The top-k would already be
+  shaped by documents the caller excluded, so filtering afterwards returns
+  fewer results from a candidate set that was wrong to begin with.
+- **A compliance verdict from this router.** D-005 rules out a rule-cited
+  compliance engine in the MVP; these routes supply evidence and the UI must
+  label early compliance findings as heuristic.

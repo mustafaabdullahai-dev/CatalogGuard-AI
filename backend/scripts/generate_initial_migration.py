@@ -241,10 +241,41 @@ def _index_calls(table: Table) -> Iterator[str]:
         args = f"op.create_index({index.name!r}, {table.name!r}, [{columns}]"
         if index.unique:
             args += ", unique=True"
+        pg = index.dialect_options["postgresql"]
+        # The access method is the whole point of an index declared with a
+        # non-default one. Emitting `ix_chunks_search_vector` as plain btree
+        # would fail on live Postgres (tsvector has no btree opclass) and, if
+        # it had succeeded, would have left hybrid retrieval doing a sequential
+        # scan over every chunk in the workspace.
+        using = pg.get("using")
+        if using:
+            args += f", postgresql_using={using!r}"
+        # `WITH (m=16, ef_construction=64)` tunes HNSW build quality; dropping
+        # it would change recall silently rather than fail loudly.
+        with_options = pg.get("with")
+        if with_options:
+            rendered = ", ".join(
+                f"{key!r}: {value!r}" for key, value in sorted(with_options.items())
+            )
+            args += f", postgresql_with={{{rendered}}}"
+        ops = pg.get("ops")
+        if ops:
+            rendered = ", ".join(
+                f"{key!r}: {value!r}" for key, value in sorted(ops.items())
+            )
+            args += f", postgresql_ops={{{rendered}}}"
+        include = pg.get("include")
+        if include:
+            rendered = ", ".join(repr(column) for column in include)
+            args += f", postgresql_include=[{rendered}]"
+        if pg.get("nulls_not_distinct"):
+            args += ", postgresql_nulls_not_distinct=True"
+        if pg.get("concurrently"):
+            args += ", postgresql_concurrently=True"
         # A partial index is a different constraint, not a nicer one. Dropping
         # the predicate would silently widen a uniqueness guarantee that only
         # holds over the live rows, so the WHERE clause has to travel with it.
-        predicate = index.dialect_options["postgresql"].get("where")
+        predicate = pg.get("where")
         if predicate is not None:
             rendered = str(predicate.compile(dialect=postgresql.dialect())).strip()
             args += f", postgresql_where=sa.text({rendered!r})"
