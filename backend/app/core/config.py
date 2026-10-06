@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 60
     llm_max_retries: int = 2
     llm_schema_repair_attempts: int = 2
+    # A model that keeps asking for tools and never answers is as unbounded as a
+    # model that keeps failing validation: both spend tokens forever.
+    llm_max_tool_rounds: int = 3
+    # Ceiling on one tool's serialized output, so no single result can fill the
+    # context window. Tools bound their own lists too; this is the backstop.
+    tool_output_max_chars: int = 8000
     llm_temperature: float = 0.0
 
     # Security

@@ -1,13 +1,13 @@
-"""The one test that needs a provider (Phase 14, §67).
+"""The tests that need a provider (Phase 14/15, §67).
 
 Skipped unless `CATALOGGUARD_LIVE_LLM=1` is set, because it is an opt-in spend
 rather than part of the default gate: a scheduled suite that quietly calls a
 third party on every run is a cost decision nobody made.
 
-It exists because everything else in `tests/agent` proves the loop *around* the
-model — the parsing, the repair bound, the routing, the abort. Only this file
-can say a real endpoint answered and the schema actually validated against real
-output. Run it with:
+Everything else in `tests/agent` proves the loop *around* the model — the
+parsing, the repair bound, the routing, the abort, the tool contract. Only this
+file can say a real endpoint answered, that the schema validated against real
+output, and that a real model reached for a tool. Run it with:
 
     CATALOGGUARD_LIVE_LLM=1 pytest tests/agent/test_llm_live.py
 """
@@ -18,10 +18,14 @@ import os
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel, Field
 
 from app.agents.client import ChatCompletionClient, ModelTier
 from app.agents.state.models import IntakeReport, ReconciliationOutput, Usage
+from app.agents.tools import ToolContext, ToolRegistry
+from app.agents.tools.catalog import SOURCE_AUTHORITY
 from app.core.config import Settings
+from app.models.tenancy import UserRole
 
 PLACEHOLDERS = ("REPLACE_ME", "dummy", "qroq-test")
 
@@ -126,3 +130,54 @@ class TestLiveProvider:
         proposed = {proposal.conflict_id for proposal in result.proposals}
         assert proposed <= {"c1"}
         assert proposed or "c1" in result.unresolved_conflicts
+
+
+
+class AuthorityAnswer(BaseModel):
+    """What the tool would have said, in the shape §36 asks for."""
+
+    decision: str = Field(max_length=60)
+    winner_source: str | None = Field(default=None, max_length=40)
+    reason: str = Field(max_length=500)
+
+
+class TestLiveToolCall:
+    async def test_a_real_model_reaches_for_a_tool(self) -> None:
+        """§23: a tool only exists if a model that has one actually uses it.
+
+        The offline suite proves the tool answers correctly when asked, and that
+        the loop carries a scripted call. Neither says a live model will choose
+        to call — that is the whole claim a tool layer makes.
+        """
+        client = _client()
+        registry = ToolRegistry([SOURCE_AUTHORITY])
+        try:
+            answer, usage = await client.complete(
+                tier=ModelTier.FAST,
+                schema=AuthorityAnswer,
+                system=(
+                    "You are the catalog reconciliation agent. You must call the "
+                    "resolve_source_authority tool to answer; do not answer from "
+                    "memory. Then reply with one JSON object."
+                ),
+                user=(
+                    "Field: gtin\n"
+                    "Candidates:\n"
+                    "- source: marketplace, value: 1111111111111\n"
+                    "- source: manufacturer, value: 2222222222222"
+                ),
+                tools=registry,
+                tool_context=ToolContext(
+                    workspace_id="ws-live", role=UserRole.DATA_STEWARD
+                ),
+            )
+        finally:
+            await client.aclose()
+
+        assert isinstance(answer, AuthorityAnswer)
+        # A tool round happened before the answer: the model asked, and only
+        # then replied. One call would mean it answered without looking.
+        assert usage.calls >= 2, "the model answered without calling the tool"
+        assert usage.input_tokens > 0
+        assert answer.decision == "resolved"
+        assert answer.winner_source == "manufacturer"

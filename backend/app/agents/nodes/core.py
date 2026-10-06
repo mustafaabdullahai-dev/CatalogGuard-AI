@@ -28,8 +28,23 @@ from app.agents.state.models import (
     ReconciliationOutput,
     Usage,
 )
+from app.agents.tools import ToolContext, ToolRegistry
 
 MAX_LISTED_FIELDS = 40
+
+INTAKE_NODE = "intake"
+NORMALIZE_NODE = "normalize"
+ANALYZE_NODE = "analyze"
+
+# Which tools each node may reach (§7: specialized roles get specialized
+# reach). The graph advertises a tool only to the node that can use its answer,
+# so a model is never asked to consider a tool that has nothing to do with the
+# question it is answering.
+NODE_TOOLS: dict[str, tuple[str, ...]] = {
+    INTAKE_NODE: (),
+    NORMALIZE_NODE: ("normalize_field",),
+    ANALYZE_NODE: ("resolve_source_authority", "resolve_identity", "assess_change_risk"),
+}
 
 INTAKE_ROLE = (
     "You are the catalog intake agent. You identify the source of a payload, "
@@ -87,10 +102,36 @@ def _catalog_summary(state: CatalogState) -> str:
 
 
 class CatalogNodes:
-    """The §7 agent roles, bound to one LLM client."""
+    """The §7 agent roles, bound to one LLM client.
 
-    def __init__(self, llm: StructuredLLM) -> None:
+    Tools are optional and per node: with none supplied the graph behaves as
+    Phase 14 left it, and the `Completer` seam keeps both cases testable without
+    a network.
+    """
+
+    def __init__(self, llm: StructuredLLM, *, tools: ToolRegistry | None = None) -> None:
         self._llm = llm
+        self._tools: dict[str, ToolRegistry | None] = {}
+        for node, names in NODE_TOOLS.items():
+            self._tools[node] = tools.subset(names) if (tools and names) else None
+
+    def _tool_kwargs(self, node: str, state: CatalogState) -> dict[str, Any]:
+        """Tools and the caller they run as, or nothing at all.
+
+        A tool without a role cannot be authorized, so the context is built from
+        the state the run entered with — workspace and initiator — rather than
+        defaulted, and a node with no tools passes no context either.
+        """
+        registry = self._tools.get(node)
+        if registry is None:
+            return {}
+        return {
+            "tools": registry,
+            "tool_context": ToolContext(
+                workspace_id=state["workspace_id"],
+                role=state["initiator_role"],
+            ),
+        }
 
     async def intake(self, state: CatalogState) -> dict[str, Any]:
         """Identify the source, classify the data, report what is wrong (§7)."""
@@ -100,6 +141,7 @@ class CatalogNodes:
                 schema=IntakeReport,
                 system=INTAKE_ROLE,
                 user=_catalog_summary(state),
+                **self._tool_kwargs(INTAKE_NODE, state),
             )
         except StructuredOutputError as exc:
             return {
@@ -131,6 +173,7 @@ class CatalogNodes:
                 schema=NormalizationPlan,
                 system=NORMALIZATION_ROLE,
                 user=_catalog_summary(state),
+                **self._tool_kwargs(NORMALIZE_NODE, state),
             )
         except StructuredOutputError as exc:
             return {
@@ -150,6 +193,7 @@ class CatalogNodes:
                 schema=ReconciliationOutput,
                 system=RECONCILIATION_ROLE,
                 user=_reconciliation_prompt(state),
+                **self._tool_kwargs(ANALYZE_NODE, state),
             )
         except StructuredOutputError as exc:
             return {
@@ -229,7 +273,11 @@ def route(errors_after: str) -> Callable[[CatalogState], str]:
 
 
 __all__ = [
+    "ANALYZE_NODE",
     "CatalogNodes",
+    "INTAKE_NODE",
+    "NODE_TOOLS",
+    "NORMALIZE_NODE",
     "finalize",
     "route",
     "INTAKE_ROLE",

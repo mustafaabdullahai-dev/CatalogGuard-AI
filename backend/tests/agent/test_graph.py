@@ -37,6 +37,7 @@ from app.agents.state.models import (
     Usage,
 )
 from app.core.config import Settings
+from app.models.tenancy import UserRole
 
 FAST_MODEL = "openai/gpt-oss-20b"
 REASONING_MODEL = "openai/gpt-oss-120b"
@@ -93,11 +94,15 @@ ANALYZE_OK = ReconciliationOutput(
 
 
 class ScriptedCompleter:
-    """Replays prepared replies in order and records what it was asked."""
+    """Replays prepared replies in order and records what it was asked.
+
+    A script item is either text (the common case) or a whole `Completion`, so a
+    test can make the model ask for a tool before it answers.
+    """
 
     def __init__(
         self,
-        replies: Sequence[str],
+        replies: Sequence[str | Completion],
         *,
         input_tokens: int = 100,
         output_tokens: int = 30,
@@ -109,18 +114,36 @@ class ScriptedCompleter:
         self._in_flight = 0
         self.peak_concurrency = 0
 
-    async def __call__(self, *, model: str, messages: Sequence[BaseMessage]) -> Completion:
+    async def __call__(
+        self,
+        *,
+        model: str,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[dict[str, Any]] | None = None,
+    ) -> Completion:
         self._in_flight += 1
         self.peak_concurrency = max(self.peak_concurrency, self._in_flight)
         try:
             await asyncio.sleep(0)
             self.calls.append(
-                {"model": model, "prompt": "\n".join(str(m.content) for m in messages)}
+                {
+                    "model": model,
+                    "prompt": "\n".join(str(m.content) for m in messages),
+                    "tools": None if tools is None else [t["function"]["name"] for t in tools],
+                }
             )
             if not self._replies:
                 raise AssertionError(f"no scripted reply left for call {len(self.calls)}")
+            reply = self._replies.pop(0)
+            if isinstance(reply, Completion):
+                return reply.model_copy(
+                    update={
+                        "input_tokens": self._input_tokens,
+                        "output_tokens": self._output_tokens,
+                    }
+                )
             return Completion(
-                text=self._replies.pop(0),
+                text=reply,
                 input_tokens=self._input_tokens,
                 output_tokens=self._output_tokens,
             )
@@ -132,6 +155,7 @@ def state(**overrides: Any) -> CatalogState:
     base: CatalogState = {
         "workspace_id": "ws-1",
         "catalog_id": "cat-1",
+        "initiator_role": UserRole.DATA_STEWARD,
         "products": [
             ProductObservation(
                 external_id="SKU-1",

@@ -29,25 +29,39 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from collections.abc import Sequence
 from enum import StrEnum
-from typing import Protocol, TypeVar, runtime_checkable
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
 import httpx
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_core.messages import (
+    ToolCall as LangChainToolCall,
+)
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
+from app.agents.parsing import json_only, validation_summary
 from app.agents.state.models import Usage
+from app.agents.tools import (
+    TOOL_OUTPUT_POLICY,
+    ToolCall,
+    ToolContext,
+    ToolRegistry,
+    wrap_tool_result,
+)
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
-
-_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
 JSON_ONLY_INSTRUCTION = (
     "Respond with a single JSON object and nothing else: no prose, no markdown "
@@ -95,6 +109,27 @@ class Completion(BaseModel):
     text: str
     input_tokens: int = 0
     output_tokens: int = 0
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+
+    def as_message(self) -> AIMessage:
+        """The reply as the API must see it when it asked for tools.
+
+        Tool results answer a *specific* assistant turn, so that turn has to go
+        back with them — and it has to carry the call ids the model minted, or
+        the provider rejects the whole exchange as unmatched.
+        """
+        return AIMessage(
+            content=self.text,
+            tool_calls=[
+                LangChainToolCall(
+                    name=call.name,
+                    args=call.arguments,
+                    id=call.id,
+                    type="tool_call",
+                )
+                for call in self.tool_calls
+            ],
+        )
 
 
 @runtime_checkable
@@ -106,7 +141,13 @@ class Completer(Protocol):
     gets exercised.
     """
 
-    async def __call__(self, *, model: str, messages: Sequence[BaseMessage]) -> Completion: ...
+    async def __call__(
+        self,
+        *,
+        model: str,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[dict[str, Any]] | None = None,
+    ) -> Completion: ...
 
 
 class ChatModelCompleter:
@@ -124,11 +165,18 @@ class ChatModelCompleter:
         self._clients = dict(clients)
         self._http_client = http_client
 
-    async def __call__(self, *, model: str, messages: Sequence[BaseMessage]) -> Completion:
+    async def __call__(
+        self,
+        *,
+        model: str,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[dict[str, Any]] | None = None,
+    ) -> Completion:
         client = self._clients.get(model)
         if client is None:
             raise ValueError(f"no chat client configured for model {model!r}")
-        response = await client.ainvoke(list(messages))
+        request = client.bind_tools(list(tools)) if tools else client
+        response = await request.ainvoke(list(messages))
         return _completion_from(response)
 
     async def aclose(self) -> None:
@@ -157,41 +205,44 @@ def _completion_from(message: AIMessage) -> Completion:
                 parts.append(str(block["text"]))
         text = "".join(parts)
 
+    tool_calls = [
+        ToolCall(
+            id=str(entry.get("id") or f"call_{index}"),
+            name=str(entry.get("name") or ""),
+            arguments=_arguments(entry.get("args")),
+        )
+        for index, entry in enumerate(message.tool_calls or [])
+    ]
+
     usage = message.usage_metadata
     return Completion(
         text=text,
         input_tokens=int(usage["input_tokens"]) if usage else 0,
         output_tokens=int(usage["output_tokens"]) if usage else 0,
+        tool_calls=tool_calls,
     )
 
 
-def _json_only(text: str) -> str:
-    """The JSON object in a reply, ignoring any wrapping the model added.
+def _arguments(raw: object) -> dict[str, Any]:
+    """Tool arguments as a dict, whatever shape they arrived in.
 
-    The prompt asks for JSON alone; a model that fences it anyway is normal, and
-    rejecting the whole reply over a fence would spend a repair round teaching it
-    something the parser already knows.
+    A model that emits malformed argument JSON still gets an answer — its call
+    fails argument validation and it is told why, which is more useful than an
+    exception that reaches the graph as if the tool were broken. The raw text is
+    kept under `_unparsed` precisely so that *can* happen: every args model
+    forbids unknown keys, so a payload nobody can read cannot silently validate
+    against a field that happens to have a default.
     """
-    fenced = _FENCE_RE.search(text)
-    if fenced:
-        return fenced.group(1).strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end > start:
-        return text[start : end + 1]
-    return text
-
-
-def _validation_summary(exc: ValidationError, *, limit: int = 3) -> str:
-    """A repair message the model can act on: the fields, not the whole dump."""
-    messages = []
-    for error in exc.errors()[:limit]:
-        location = ".".join(str(part) for part in error["loc"])
-        messages.append(f"{location}: {error['msg']}")
-    remaining = len(exc.errors()) - limit
-    if remaining > 0:
-        messages.append(f"... and {remaining} more")
-    return "; ".join(messages)
+    if isinstance(raw, dict):
+        return dict(raw)
+    text = raw if isinstance(raw, str) else json.dumps(raw, default=str)
+    try:
+        parsed = json.loads(text)
+    except (ValueError, TypeError):
+        return {"_unparsed": text}
+    if isinstance(parsed, dict):
+        return parsed
+    return {"_unparsed": text}
 
 
 def _usage_line(input_tokens: int, output_tokens: int) -> str:
@@ -222,7 +273,7 @@ def repair_prompt(exc: ValidationError) -> str:
     return (
         "That JSON did not validate against the schema. Fix only what the errors "
         "below require, keep every field the schema requires, and reply again "
-        f"with one JSON object and nothing else.\n{_validation_summary(exc)}"
+        f"with one JSON object and nothing else.\n{validation_summary(exc)}"
     )
 
 
@@ -303,30 +354,101 @@ class ChatCompletionClient:
         schema: type[T],
         system: str,
         user: str,
+        tools: ToolRegistry | None = None,
+        tool_context: ToolContext | None = None,
     ) -> tuple[T, Usage]:
-        """One validated object, or `StructuredOutputError` — never an unvalidated one."""
+        """One validated object, or `StructuredOutputError` — never an unvalidated one.
+
+        With tools, each attempt lets the model ask for them first, bounded by
+        `llm_max_tool_rounds`, before it must answer. The two bounds are one
+        budget: a model looping on tools spends exactly like a model looping on
+        invalid JSON, and D-007 does not distinguish them.
+        """
+        if (tools is None) != (tool_context is None):
+            raise ValueError("tools and tool_context must be supplied together")
+
         model = self.model_for(tier)
+        tool_setup: tuple[ToolRegistry, ToolContext] | None = None
+        tool_schemas: list[dict[str, Any]] | None = None
+        system_prompt = schema_first_prompt(schema, system)
+        if tools is not None and tool_context is not None:
+            tool_setup = (tools, tool_context)
+            tool_schemas = tools.schemas()
+            system_prompt += (
+                "\n\n" + TOOL_OUTPUT_POLICY + "\n\nAvailable tools:\n" + tools.describe()
+            )
         messages: list[BaseMessage] = [
-            SystemMessage(content=schema_first_prompt(schema, system)),
+            SystemMessage(content=system_prompt),
             HumanMessage(content=user),
         ]
 
         input_tokens = 0
         output_tokens = 0
-        problems: list[str] = []
+        model_calls = 0
+        tool_rounds = 0
         attempts = 0
+        problems: list[str] = []
         repairs_allowed = self._settings.llm_schema_repair_attempts
+        max_tool_rounds = self._settings.llm_max_tool_rounds
 
         async with self._limiter:
             for attempt in range(1, repairs_allowed + 2):  # first call + bounded repairs
                 attempts = attempt
-                response = await self._completer(model=model, messages=messages)
-                input_tokens += response.input_tokens
-                output_tokens += response.output_tokens
+                reply_text: str | None = None
+
+                # One answer attempt plus `max_tool_rounds` chances to ask for
+                # tools. If the loop ends without an answer, the model spent
+                # every chance on tool calls and the run fails loudly.
+                for _round in range(max_tool_rounds + 2):
+                    response = await self._completer(
+                        model=model, messages=messages, tools=tool_schemas
+                    )
+                    model_calls += 1
+                    input_tokens += response.input_tokens
+                    output_tokens += response.output_tokens
+
+                    if not response.tool_calls:
+                        reply_text = response.text
+                        break
+                    if tool_setup is None:
+                        messages.append(
+                            HumanMessage(
+                                content=(
+                                    "No tools are configured for this call. Answer from the "
+                                    "schema alone, or say what you cannot determine without one."
+                                )
+                            )
+                        )
+                        continue
+                    if tool_rounds >= max_tool_rounds:
+                        # It asked once too often. `reply_text` stays empty, so
+                        # the run fails below rather than granting one more round.
+                        break
+                    tool_rounds += 1
+                    registry, context = tool_setup
+                    messages.append(response.as_message())
+                    for call in response.tool_calls:
+                        outcome = await registry.execute(
+                            call.name, call.arguments, context=context
+                        )
+                        messages.append(
+                            ToolMessage(
+                                content=wrap_tool_result(call.name, outcome.content),
+                                tool_call_id=call.id,
+                            )
+                        )
+
+                if reply_text is None:
+                    problems.append(
+                        f"the model asked for tools in {max_tool_rounds + 1} consecutive "
+                        "turns and never answered"
+                    )
+                    break
+
                 try:
-                    parsed = schema.model_validate_json(_json_only(response.text))
+                    parsed = schema.model_validate_json(json_only(reply_text))
                 except ValidationError as exc:
-                    problems.append(_validation_summary(exc))
+                    problems.append(validation_summary(exc))
                     messages = [
                         *messages,
                         HumanMessage(content=repair_prompt(exc)),
@@ -340,12 +462,13 @@ class ChatCompletionClient:
                     schema=schema.__name__,
                     attempts=attempt,
                     repairs=attempt - 1,
+                    tool_rounds=tool_rounds,
                     usage=_usage_line(input_tokens, output_tokens),
                 )
                 return parsed, Usage(
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
-                    calls=attempt,
+                    calls=model_calls,
                     repairs=max(0, attempt - 1),
                 )
 
@@ -364,6 +487,7 @@ class ChatCompletionClient:
             model=model,
             schema=schema.__name__,
             attempts=attempts,
+            tool_rounds=tool_rounds,
             usage=_usage_line(input_tokens, output_tokens),
         )
         raise error

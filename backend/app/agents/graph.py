@@ -25,26 +25,39 @@ from typing import Any, cast
 from langgraph.graph import END, START, StateGraph
 
 from app.agents.client import ChatCompletionClient, StructuredLLM
-from app.agents.nodes.core import CatalogNodes, finalize, route
+from app.agents.nodes.core import (
+    ANALYZE_NODE as ANALYZE,
+)
+from app.agents.nodes.core import (
+    INTAKE_NODE as INTAKE,
+)
+from app.agents.nodes.core import (
+    NORMALIZE_NODE as NORMALIZE,
+)
+from app.agents.nodes.core import (
+    CatalogNodes,
+    finalize,
+    route,
+)
 from app.agents.state.models import CatalogState
+from app.agents.tools import ToolRegistry, default_registry
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-INTAKE = "intake"
-NORMALIZE = "normalize"
-ANALYZE = "analyze"
 FINALIZE = "finalize"
 
 
-def build_graph(llm: StructuredLLM) -> Any:
-    """Compile the graph against `llm`.
+def build_graph(llm: StructuredLLM, *, tools: ToolRegistry | None = None) -> Any:
+    """Compile the graph against `llm`, with `tools` available to the nodes.
 
     The client is injected rather than read from module state so a test can run
     the whole graph with scripted replies, and so a later phase can pass a client
-    configured for one run without mutating global configuration.
+    configured for one run without mutating global configuration. Tools are
+    injected for the same reason, and each node receives only the subset it can
+    use (`NODE_TOOLS`).
     """
-    nodes = CatalogNodes(llm)
+    nodes = CatalogNodes(llm, tools=tools)
     builder = StateGraph(CatalogState)
 
     builder.add_node(INTAKE, nodes.intake)
@@ -65,6 +78,7 @@ async def run_graph(
     state: CatalogState,
     *,
     llm: StructuredLLM | None = None,
+    tools: ToolRegistry | None = None,
 ) -> CatalogState:
     """Run one catalog analysis and return the resulting state.
 
@@ -76,13 +90,17 @@ async def run_graph(
     bound to the event loop that ran the graph, and a run's own resources should
     not outlive the run. A caller-supplied client stays open — the caller decides
     how long it lives.
+
+    Tools default to the read-only registry (Phase 15). Pass `ToolRegistry()` for
+    a run that must have none, rather than reaching in to remove them after.
     """
     owned: ChatCompletionClient | None = None
     if llm is None:
         owned = ChatCompletionClient()
         llm = owned
+    registry = default_registry() if tools is None else tools
     try:
-        result = await build_graph(llm).ainvoke(state)
+        result = await build_graph(llm, tools=registry).ainvoke(state)
     finally:
         if owned is not None:
             await owned.aclose()

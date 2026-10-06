@@ -30,6 +30,8 @@ from typing import Literal, NotRequired, TypedDict
 
 from pydantic import BaseModel, Field
 
+from app.models.tenancy import UserRole
+
 AgentStatus = Literal["pending", "completed", "aborted"]
 
 IssueSeverity = Literal["error", "warning"]
@@ -184,6 +186,10 @@ class CatalogState(TypedDict):
 
     workspace_id: str
     catalog_id: str
+    # Who the tools are acting for. Required because a tool without a role
+    # cannot be authorized (§23), and authorization is checked per run rather
+    # than assumed from the fact that a graph is running.
+    initiator_role: UserRole
     products: list[ProductObservation]
     conflicts: list[ConflictObservation]
 
