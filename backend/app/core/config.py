@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, ValidationError, field_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -46,9 +46,18 @@ class Settings(BaseSettings):
     # LLM
     qroq_api_key: str = Field(..., description="Qroq API key. Never log this.")
     qroq_base_url: str = "https://api.groq.com/openai/v1"
-    qroq_fast_model: str = "llama-3.3-70b-versatile"
+    # Both model ids below were confirmed against this provider's /models and
+    # /chat/completions on 2026-10-06, schema-constrained JSON included. The
+    # previous fast-model default (`llama-3.3-70b-versatile`) was not in the
+    # list the provider returned: a default naming a model that does not exist
+    # fails at the first call, far from the setting that caused it.
+    qroq_fast_model: str = "openai/gpt-oss-20b"
     qroq_reasoning_model: str = "openai/gpt-oss-120b"
-    qroq_embedding_model: str = "text-embedding-ada-002"
+    # Empty on purpose. This provider's /embeddings answered `model_not_found`
+    # on 2026-10-06 for every candidate id, so no value here would work — an
+    # empty string with a startup check says so once, instead of failing an
+    # ingest later and blaming the document.
+    qroq_embedding_model: str = ""
     llm_timeout_seconds: int = 60
     llm_max_retries: int = 2
     llm_schema_repair_attempts: int = 2
@@ -242,6 +251,24 @@ class Settings(BaseSettings):
         if "REPLACE_ME" in v:
             raise ValueError("QROQ_API_KEY is still a placeholder.")
         return v
+
+    @model_validator(mode="after")
+    def _embedding_mode_needs_a_model(self) -> Settings:
+        """Refuse a semantic-indexing mode that cannot produce vectors.
+
+        Without this, `RAG_EMBEDDING_MODE=qroq` loads fine and fails at the
+        first ingest, where the error reads like a bad document — and by then
+        the deployment believes it indexes semantically.
+        """
+        if self.rag_embedding_mode == "qroq" and not self.qroq_embedding_model:
+            raise ValueError(
+                "RAG_EMBEDDING_MODE=qroq requires QROQ_EMBEDDING_MODEL. This "
+                "provider served no embedding model when probed, so the value is "
+                "empty by default: set RAG_EMBEDDING_MODE=none to index on "
+                "keyword and metadata evidence only, or point at a provider "
+                "that embeds."
+            )
+        return self
 
     @field_validator("redis_url")
     @classmethod

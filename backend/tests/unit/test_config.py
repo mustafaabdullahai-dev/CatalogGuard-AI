@@ -87,6 +87,38 @@ class TestListParsing:
         assert isinstance(_settings().mask_key_set, frozenset)
 
 
+class TestEmbeddingModeGuard:
+    """A semantic-indexing mode must not load without something to embed with.
+
+    `RAG_EMBEDDING_MODE=qroq` otherwise starts cleanly and fails at the first
+    ingest, where the message reads like a bad document — and by then the
+    deployment believes it indexes semantically.
+    """
+
+    def test_qroq_mode_without_a_model_is_refused(self) -> None:
+        with pytest.raises(ValidationError, match="QROQ_EMBEDDING_MODEL"):
+            _settings(rag_embedding_mode="qroq", qroq_embedding_model="")
+
+    def test_qroq_mode_with_a_model_loads(self) -> None:
+        s = _settings(rag_embedding_mode="qroq", qroq_embedding_model="some-model")
+        assert s.rag_embedding_mode == "qroq"
+
+    def test_none_mode_needs_no_model(self) -> None:
+        assert _settings().rag_embedding_mode == "none"
+
+    def test_no_embedding_model_is_claimed_by_default(self) -> None:
+        """The provider served no embedding model when probed (2026-10-06).
+
+        A default naming one would read as configured, and would fail an ingest
+        later with an error blaming the document.
+        """
+        assert _settings().qroq_embedding_model == ""
+
+    def test_fast_model_default_is_not_the_retired_id(self) -> None:
+        """`llama-3.3-70b-versatile` was never in the provider's model list."""
+        assert _settings().qroq_fast_model != "llama-3.3-70b-versatile"
+
+
 class TestRiskDefaults:
     def test_llm_concurrency_is_conservative_for_free_tier(self) -> None:
         """D-004: Qroq free tier throttles. Concurrency must stay low."""
