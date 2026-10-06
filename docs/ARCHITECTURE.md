@@ -409,18 +409,24 @@ marketplace listings. Telemetry must not leave our infrastructure.
 - **Every authenticated request does two indexed lookups** — session, then
   memberships. Caching either re-introduces the revocation problem D-014 was
   chosen to solve.
-- **Auth is unit-tested, not integration-tested.** There is no database, so the
-  sign-in path has never run against real SQL. The password hashing, session
-  arithmetic, CSRF middleware, and authorization matrix are covered; the actual
-  queries are not.
-- **Authentication is not built yet.** Nothing binds a tenant in production, so
-  RLS currently denies every tenant query. This is the intended order: the
-  policy ships before the identity layer that satisfies it.
-- **Python 3.13.** Very new. Works, but a few dependencies may publish late
-  wheels; 3.12 is the safer floor if that bites.
-- **No compliance RAG at MVP.** Compliance findings will be heuristic rather
-  than rule-cited. The UI must label them as such rather than presenting them
-  as authoritative.
+- **Authentication is built, but never against real SQL.** There is still no
+  live database, so the sign-in path, the membership lookup and the
+  `app.current_workspace` binding that satisfies RLS have never executed
+  against Postgres. The password hashing, session arithmetic, CSRF middleware
+  and authorization matrix are covered; the queries are not. Until that first
+  real session, RLS denies every tenant query — which fails closed, as
+  intended, rather than open.
+- **The venv is Python 3.12.14, not 3.13.** `requires-python` is
+  `>=3.12,<3.14` and mypy targets 3.12, so both are supported and only 3.12
+  has ever been run.
+- **Compliance RAG is inside the MVP even though §71 lists it post-MVP.** The
+  scope conflict is written up on the phase-13 page. Retrieval is keyword-only
+  until an embedding provider exists, and D-005 still rules out a rule-cited
+  compliance *decision* in the MVP: the UI must label findings as retrieved
+  evidence rather than as authoritative verdicts.
+- **The agent graph has no tools and no HTTP surface.** Phase 14 delivers the
+  orchestration: `run_graph` is called by tests, nothing streams per-node
+  progress to a client, and no proposal it produces is persisted anywhere.
 - **Execution path is mock-only.** Real marketplace rate limits and
   partial-failure modes remain unvalidated.
 - **Dramatiq has no delayed-job scheduling.** Scheduled compliance scans will

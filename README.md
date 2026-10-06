@@ -9,22 +9,28 @@ simulates. Humans approve. Connectors execute. Logs remember.
 
 ## Current status
 
-**Phases 8–13: authentication, catalog domain, conflicts, risk, ingestion, the
-canonical model, reconciliation and the compliance corpus.** Sign-in, tenant
-isolation, the catalog domain
+**Phases 8–14: authentication, catalog domain, conflicts, risk, ingestion, the
+canonical model, reconciliation, the compliance corpus and LangGraph
+orchestration.** Sign-in, tenant isolation, the catalog domain
 (normalization, identity, relationships, source authority), conflict detection,
 deterministic risk scoring, catalog ingestion (validation, CSV/JSON/Excel parsing,
 schema detection and raw storage), canonicalization (raw records → `products`,
 identifiers and v1 versions), the reconciliation engine (source authority →
-conflicts → risk-scored change proposals), and compliance retrieval (chunked
-marketplace policy, hybrid keyword + vector search, citable evidence) are
-complete and unit tested. Nothing has
-run against a live database or a live LLM provider yet.
+conflicts → risk-scored change proposals), compliance retrieval (chunked
+marketplace policy, hybrid keyword + vector search, citable evidence), and the
+agent graph (intake → normalize → analyze → finalize, with D-007's schema
+validation and bounded repair on every model call) are complete and unit
+tested — **781 tests**, plus two opt-in live-provider tests.
+
+A live LLM provider **has** now been called: two real calls, fast and reasoning
+tier, validated against our schemas. Nothing has run against a live database.
+Every phase's delivery, gates and gaps are recorded in
+[`docs/phases/`](docs/phases/README.md).
 
 | Component | State |
 |---|---|
 | Repository structure | Scaffolded |
-| Python 3.13 venv + pinned dependencies | Installed |
+| Python 3.12 venv (`requires-python >=3.12,<3.14`) + pinned dependencies | Installed |
 | Settings, logging, edge masking | Implemented, unit tested |
 | FastAPI app shell, `/health`, `/ready`, OpenAPI | Unit tested in-process |
 | ORM: 33 tables across tenancy, catalog, reconciliation, platform, compliance | Implemented, unit tested |
@@ -48,7 +54,7 @@ run against a live database or a live LLM provider yet.
 | Compliance corpus: section-aware chunking, content-hash dedup (D-021) | Implemented, 52 tests |
 | Hybrid retrieval: GIN keyword `ts_rank` + pgvector cosine, deterministic rerank | Implemented, unit tested |
 | Compliance API: ingest / list / search with per-hit citations and a signal note | Implemented, 12 tests |
-| Embeddings: provider port with a null adapter | Implemented; **unverified** — no embedding provider configured |
+| Embeddings: provider port with a null adapter | Implemented; **no embedding provider works** — `/embeddings` answered `model_not_found` for every candidate id (`504009f`), so retrieval runs keyword-only |
 | RBAC guards and tenant binding wired to the session | Implemented, unit tested |
 | CSRF (signed double-submit) and security headers | Implemented, in-process tested |
 | Tenant isolation: composite FKs, tenant-scoped repository, RLS policies (D-011) | Implemented, unit tested |
@@ -56,8 +62,9 @@ run against a live database or a live LLM provider yet.
 | Initial migration, generated from ORM metadata | Offline SQL verified |
 | Postgres (Neon) | TLS verified; **not yet applied**, awaiting rotation |
 | Redis (Upstash) | **Verified live** — Redis 8.4.0, TLS required |
-| LLM (Qroq) | Not wired; needs a rotated API key |
-| Agents, LangGraph workflow, sandbox simulation | Not started |
+| LLM (Qroq) | **Wired and live-verified** — fast (`openai/gpt-oss-20b`) and reasoning (`openai/gpt-oss-120b`) confirmed against the endpoint; key still needs rotation |
+| Agent graph (§7 roles, §24 state, D-007 validation layer) | Implemented, 12 unit tests + 2 opt-in live tests |
+| Agent tools, sandbox simulation | Not started |
 | Frontend: dashboard, catalog explorer, approval center | Implemented, unit tested |
 | Outbound mail transport | Not configured; messages queue to `email_outbox` (D-017) |
 
@@ -81,8 +88,10 @@ above as *implemented but not verified* until the corresponding phase runs.
 
 Three items gate the next phase, all requiring action outside the codebase:
 
-1. **Rotate the Qroq API key.** It was shared in plaintext. Put the new value in
-   `.env` as `QROQ_API_KEY`. Config refuses to start while it is a placeholder.
+1. **Rotate the Qroq API key.** It was shared in plaintext — and it has since
+   been used for two live provider calls, which proves it works and does not
+   make it private. Put the new value in `.env` as `QROQ_API_KEY`. Config
+   refuses to start while it is a placeholder.
 2. **Rotate the Neon database password.** Also shared in plaintext. Update
    `DATABASE_URL` in `.env`.
 3. **Rotate the Upstash Redis password.** Also shared in plaintext. Update
@@ -99,7 +108,7 @@ DNS; a working endpoint was supplied later.
 CatalogGuard AI/
 ├── backend/
 │   ├── app/
-│   │   ├── agents/       LangGraph orchestration (nodes, tools, state)
+│   │   ├── agents/       LangGraph orchestration (nodes, state, client, tools)
 │   │   ├── api/v1/       FastAPI routers
 │   │   ├── core/         config, logging, masking
 │   │   ├── db/           engine, session, models
@@ -108,9 +117,9 @@ CatalogGuard AI/
 │   │   ├── workers/      Dramatiq actors
 │   │   └── main.py       ASGI factory
 │   ├── alembic/          migrations
-│   ├── tests/            unit, integration, agent, e2e
+│   ├── tests/            unit, agent; integration and e2e are empty
 │   └── pyproject.toml
-├── frontend/             Next.js (not yet scaffolded)
+├── frontend/             Next.js app, auth screens and shell
 ├── docs/
 ├── scripts/
 ├── docker/
@@ -134,8 +143,10 @@ Swagger UI at `http://localhost:3000/docs` when the frontend proxies, or
 ### Tests and lint
 
 ```bash
-python -m pytest -q                   # unit suite, no database required
+python -m pytest -q                   # 781 tests, no database required
+CATALOGGUARD_LIVE_LLM=1 python -m pytest tests/agent -q   # opt-in: 2 live LLM calls
 python -m ruff check app tests alembic scripts
+python -m mypy app
 ```
 
 ### Migrations
@@ -170,8 +181,11 @@ Three independent layers, all required (D-011):
    transaction-local setting `app.current_workspace`.
 
 RLS denies when no tenant is bound, so a query without one returns nothing
-rather than everything. Until authentication lands in Phase 8, nothing binds a
-tenant in production, which means tenant queries fail closed until then.
+rather than everything. Authentication (Phase 9) is what binds a tenant: the
+server checks `X-Workspace-Id` against the caller's memberships and sets
+`app.current_workspace` for the transaction. That binding has been unit-tested
+but has never run against a real database, so today every tenant query still
+fails closed — by absence of a database rather than by absence of identity.
 
 ```python
 from app.db.session import tenant_scope
@@ -286,7 +300,7 @@ vector store (D-006), LLM provider (D-007), job queue (D-008), database hosting
 version history (D-012), append-only audit logs (D-013), authentication (D-014),
 the catalog domain (D-015), the risk engine (D-016), account recovery and
 invitations (D-017), catalog ingestion (D-018), the canonical product model
-(D-019), and reconciliation (D-020).
+(D-019), reconciliation (D-020), and the compliance capability gate (D-021).
 
 ---
 

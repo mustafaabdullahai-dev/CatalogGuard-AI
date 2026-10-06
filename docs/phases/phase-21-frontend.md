@@ -1,11 +1,11 @@
 # Phase 21 — Frontend
 
-**Status:** Partially built — shell and auth flows exist
+**Status:** Partially built — shell, auth flows, dashboard, catalog and approvals pages
 **§64 scope:** Frontend
 
-> Retroactive stub written 2026-10-06. This page states scope, entry conditions
-> and exit criteria only. It makes no delivery claims: nothing for this phase
-> has been built.
+> Retroactive page written 2026-10-06 from the commits and the tree in
+> `frontend/`. It records what exists; the exit criteria below are what
+> remains, and the notes claim nothing the tree cannot show.
 
 ## Governing sections
 
