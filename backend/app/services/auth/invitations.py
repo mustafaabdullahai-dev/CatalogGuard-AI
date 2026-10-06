@@ -27,13 +27,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
+from uuid import UUID
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.security.tokens import generate_token, hash_token, utcnow
+from app.db.rows import affected_rows
 from app.models.tenancy import (
     User,
     UserRole,
@@ -85,7 +88,7 @@ class IssuedInvitation:
     queued_message_id: object
 
 
-def _live_filters() -> tuple[object, object]:
+def _live_filters() -> tuple[ColumnElement[bool], ColumnElement[bool]]:
     """Predicates for an invitation that can still be redeemed."""
     return (
         WorkspaceInvitation.revoked_at.is_(None),
@@ -94,7 +97,7 @@ def _live_filters() -> tuple[object, object]:
 
 
 async def _find_live(
-    db: AsyncSession, *, workspace_id: object, email: str
+    db: AsyncSession, *, workspace_id: UUID, email: str
 ) -> WorkspaceInvitation | None:
     result = await db.execute(
         select(WorkspaceInvitation).where(
@@ -106,7 +109,9 @@ async def _find_live(
     return result.scalar_one_or_none()
 
 
-async def _is_member(db: AsyncSession, *, workspace_id: object, user_id: object) -> bool:
+async def _is_member(
+    db: AsyncSession, *, workspace_id: UUID, user_id: UUID
+) -> bool:
     count = await db.scalar(
         select(func.count())
         .select_from(WorkspaceMembership)
@@ -121,7 +126,7 @@ async def _is_member(db: AsyncSession, *, workspace_id: object, user_id: object)
 async def invite(
     db: AsyncSession,
     *,
-    workspace_id: object,
+    workspace_id: UUID,
     email: str,
     role: UserRole,
     invited_by: User,
@@ -221,7 +226,9 @@ async def invite(
     )
 
 
-async def revoke(db: AsyncSession, *, invitation_id: object, workspace_id: object) -> bool:
+async def revoke(
+    db: AsyncSession, *, invitation_id: UUID, workspace_id: UUID
+) -> bool:
     """Revoke a live invitation.
 
     Scoped by workspace on purpose: revoking by id alone would let an admin of
@@ -245,7 +252,7 @@ async def revoke(db: AsyncSession, *, invitation_id: object, workspace_id: objec
 
 
 async def list_invitations(
-    db: AsyncSession, *, workspace_id: object, include_closed: bool = False
+    db: AsyncSession, *, workspace_id: UUID, include_closed: bool = False
 ) -> list[WorkspaceInvitation]:
     conditions = [WorkspaceInvitation.workspace_id == workspace_id]
     if not include_closed:
@@ -382,4 +389,4 @@ async def purge_expired(db: AsyncSession, *, older_than_days: int = 30) -> int:
             | WorkspaceInvitation.revoked_at.is_not(None),
         )
     )
-    return int(result.rowcount or 0)
+    return affected_rows(result)

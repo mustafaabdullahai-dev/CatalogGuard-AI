@@ -12,16 +12,35 @@ so `deleted_at IS NULL` cannot be forgotten either.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import Select, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.base import Base, TenantContext
+from app.db.base import (
+    ImmutableTenantEntity,
+    SoftDeletableTenantEntity,
+    TenantContext,
+    TenantEntity,
+)
+from app.db.rows import affected_rows
+
+# A repository model must carry an id and a `workspace_id`, because every
+# method here filters or stamps one. The three tenant-owned abstract bases are
+# siblings, not a hierarchy -- `SoftDeletableTenantEntity` and
+# `ImmutableTenantEntity` do not subclass `TenantEntity` -- so the bound is
+# their union rather than any one of them. Bounding on `Base` instead would let
+# a repository be declared for a table with no tenant column at all, and the
+# tenant predicate would fail at runtime on the first query. `workspaces`
+# (`SoftDeletableEntity`) is absent from the union by design: a workspace *is*
+# the tenant, so it has no `workspace_id` column and is deliberately not
+# repository-managed.
+TenantRowModel = TenantEntity | SoftDeletableTenantEntity | ImmutableTenantEntity
 
 
-class TenantRepository[ModelT: Base]:
+class TenantRepository[ModelT: TenantRowModel]:
     """CRUD scoped to a single workspace.
 
     Usage:
@@ -53,14 +72,20 @@ class TenantRepository[ModelT: Base]:
         statement = statement.where(
             self.model.workspace_id == self._tenant.workspace_id
         )
-        if hasattr(self.model, "deleted_at"):
-            statement = statement.where(self.model.deleted_at.is_(None))
+        # `hasattr` rather than an isinstance check against `SoftDeleteMixin`:
+        # immutable tables (D-012/D-013) have no `deleted_at` column at all, and
+        # the column's absence is the assertion. `getattr` with a None default
+        # gives mypy the same narrowing without weakening the runtime check.
+        deleted_at = getattr(self.model, "deleted_at", None)
+        if deleted_at is not None:
+            statement = statement.where(deleted_at.is_(None))
         return statement
 
     async def get(self, entity_id: UUID) -> ModelT | None:
         statement = self._scoped(select(self.model).where(self.model.id == entity_id))
         result = await self._session.execute(statement)
-        return result.scalar_one_or_none()
+        entity: ModelT | None = result.scalar_one_or_none()
+        return entity
 
     async def get_many(self, entity_ids: Sequence[UUID]) -> Sequence[ModelT]:
         if not entity_ids:
@@ -69,7 +94,8 @@ class TenantRepository[ModelT: Base]:
             select(self.model).where(self.model.id.in_(entity_ids))
         )
         result = await self._session.execute(statement)
-        return result.scalars().all()
+        entities: Sequence[ModelT] = result.scalars().all()
+        return entities
 
     async def list(
         self,
@@ -124,8 +150,11 @@ class TenantRepository[ModelT: Base]:
         if entity is None:
             return False
 
+        # `hasattr`, not a value check: an immutable table has no `deleted_at`
+        # attribute at all, whereas a soft-deletable row has one that is
+        # currently None. Testing the *value* would hard-delete every live row.
         if hasattr(entity, "deleted_at"):
-            entity.deleted_at = _utcnow()
+            entity.deleted_at = datetime.now(UTC)
             await self._session.flush()
             return True
 
@@ -144,7 +173,7 @@ class TenantRepository[ModelT: Base]:
             .where(self.model.workspace_id == self._tenant.workspace_id)
         )
         result = await self._session.execute(statement)
-        return bool(result.rowcount)
+        return affected_rows(result) > 0
 
     async def update_fields(self, entity_id: UUID, **values: Any) -> ModelT | None:
         """Patch scalar fields. Raises if the row is outside this tenant."""
@@ -176,10 +205,4 @@ class TenantRepository[ModelT: Base]:
             .values(**values)
         )
         result = await self._session.execute(statement)
-        return int(result.rowcount or 0)
-
-
-def _utcnow():
-    from datetime import UTC, datetime
-
-    return datetime.now(UTC)
+        return affected_rows(result)

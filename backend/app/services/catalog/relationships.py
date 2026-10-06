@@ -26,6 +26,13 @@ VARIATION_AXES: frozenset[str] = frozenset({"color", "size", "material", "style"
 # Axes a parent must itself declare when it varies on them.
 MAX_TREE_DEPTH = 6
 
+# How a node is addressed. Both forms occur in practice: `products.id` is a UUID,
+# while a tree assembled from a supplier spreadsheet may key on an MPN string.
+# Naming the union keeps a `dict[NodeId, ...]` keyed on one comparable with a
+# `parent_id` of the other, instead of forcing every container to `object` and
+# losing the check that the two halves of a lookup actually agree.
+NodeId = uuid.UUID | str
+
 
 class IssueKind(StrEnum):
     ORPHAN_CHILD = "orphan_child"
@@ -113,7 +120,7 @@ class Finding:
         }
 
 
-def detect_cycles(nodes: dict[object, TreeNode]) -> list[Finding]:
+def detect_cycles(nodes: dict[NodeId, TreeNode]) -> list[Finding]:
     """Find every cycle in the parent chain.
 
     Iterative DFS with a colouring pass, O(n) across all nodes: a catalogue is
@@ -124,19 +131,19 @@ def detect_cycles(nodes: dict[object, TreeNode]) -> list[Finding]:
     and `B -> A -> B` are a single finding rather than two.
     """
     unvisited, on_path, done = 0, 1, 2
-    colour: dict[object, int] = dict.fromkeys(nodes, unvisited)
+    colour: dict[NodeId, int] = dict.fromkeys(nodes, unvisited)
     findings: list[Finding] = []
     seen_cycles: set[tuple[str, ...]] = set()
 
-    def label(node_id: object) -> str:
+    def label(node_id: NodeId) -> str:
         node = nodes[node_id]
         return str(node.sku or node.id)
 
     for start in nodes:
         if colour[start] != unvisited:
             continue
-        path: list[object] = []
-        current: object | None = start
+        path: list[NodeId] = []
+        current: NodeId | None = start
         cycle: tuple[str, ...] | None = None
         while current is not None and current in nodes and colour[current] != done:
             if colour[current] == on_path:
@@ -172,7 +179,7 @@ def detect_cycles(nodes: dict[object, TreeNode]) -> list[Finding]:
     return findings
 
 
-def _index(nodes: list[TreeNode]) -> dict[object, TreeNode]:
+def _index(nodes: list[TreeNode]) -> dict[NodeId, TreeNode]:
     return {node.id: node for node in nodes}
 
 
@@ -205,7 +212,7 @@ def validate_relationships(
     """
     index = _index(nodes)
     findings: list[Finding] = []
-    children_by_parent: dict[object, list[TreeNode]] = {}
+    children_by_parent: dict[NodeId, list[TreeNode]] = {}
     for node in nodes:
         if node.parent_id is not None:
             children_by_parent.setdefault(node.parent_id, []).append(node)
@@ -372,7 +379,7 @@ def _multi_parent_findings(
     if not edges:
         return []
     index = _index(nodes)
-    parents_by_child: dict[object, list[RelationshipEdge]] = {}
+    parents_by_child: dict[NodeId, list[RelationshipEdge]] = {}
     for edge in edges:
         parents_by_child.setdefault(edge.child_id, []).append(edge)
 
@@ -442,7 +449,7 @@ def _bundle_findings(edges: list[RelationshipEdge] | None) -> list[Finding]:
     """
     if not edges:
         return []
-    bundle_children: dict[object, list[object]] = {}
+    bundle_children: dict[NodeId, list[NodeId]] = {}
     for edge in edges:
         if edge.relationship_type == "bundle":
             bundle_children.setdefault(edge.parent_id, []).append(edge.child_id)
@@ -483,10 +490,10 @@ def _bundle_findings(edges: list[RelationshipEdge] | None) -> list[Finding]:
     return findings
 
 
-def _reaches(graph: dict[object, list[object]], start: object, target: object) -> bool:
+def _reaches(graph: dict[NodeId, list[NodeId]], start: NodeId, target: NodeId) -> bool:
     """Whether `target` is reachable from `start`, iteratively and once each."""
     stack = list(graph.get(start, []))
-    seen: set[object] = set()
+    seen: set[NodeId] = set()
     while stack:
         node = stack.pop()
         if node == target:
@@ -499,7 +506,7 @@ def _reaches(graph: dict[object, list[object]], start: object, target: object) -
 
 
 def _depth_findings(
-    nodes: list[TreeNode], index: dict[object, TreeNode]
+    nodes: list[TreeNode], index: dict[NodeId, TreeNode]
 ) -> list[Finding]:
     """Catalogue trees deeper than `MAX_TREE_DEPTH` are unreadable, not deep.
 
@@ -510,7 +517,7 @@ def _depth_findings(
     for node in nodes:
         depth = 0
         current = node.parent_id
-        guard: set[object] = {node.id}
+        guard: set[NodeId] = {node.id}
         while current is not None and current in index and depth <= MAX_TREE_DEPTH + 1:
             if current in guard:
                 break

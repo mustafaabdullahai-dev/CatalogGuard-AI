@@ -133,7 +133,9 @@ class AuthorityResolution:
 
 
 def rank_for(
-    field_name: str, source: SourceType, overrides: dict[str, dict[str, int]] | None = None
+    field_name: str,
+    source: SourceType,
+    overrides: dict[str, dict[SourceType, int]] | None = None,
 ) -> int:
     """Effective rank for a source on a field.
 
@@ -161,7 +163,7 @@ def _comparable(value: object) -> object:
 def resolve(
     field_name: str,
     candidates: list[Candidate],
-    overrides: dict[str, dict[str, int]] | None = None,
+    overrides: dict[str, dict[SourceType, int]] | None = None,
 ) -> AuthorityResolution:
     """Decide the canonical value for one field, or decline to."""
     usable = [c for c in candidates if c.value is not None and c.value != ""]

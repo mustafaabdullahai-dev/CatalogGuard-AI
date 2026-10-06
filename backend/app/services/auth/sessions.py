@@ -29,6 +29,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.db.rows import affected_rows
 from app.models.tenancy import AuthSession, User
 
 TOKEN_BYTES = 32
@@ -160,7 +161,7 @@ async def revoke_all_sessions(
     if except_session is not None:
         statement = statement.where(AuthSession.id != except_session.id)
     result = await db.execute(statement)
-    return int(result.rowcount or 0)
+    return affected_rows(result)
 
 
 async def purge_expired(db: AsyncSession, *, older_than_days: int = 30) -> int:
@@ -174,4 +175,4 @@ async def purge_expired(db: AsyncSession, *, older_than_days: int = 30) -> int:
     result = await db.execute(
         delete(AuthSession).where(AuthSession.expires_at < cutoff)
     )
-    return int(result.rowcount or 0)
+    return affected_rows(result)

@@ -32,6 +32,7 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.security.passwords import hash_password
 from app.core.security.tokens import generate_token, hash_token, utcnow
+from app.db.rows import affected_rows
 from app.models.tenancy import PasswordResetToken, User
 from app.services.auth import sessions, throttle
 from app.services.notify import delivery
@@ -241,4 +242,4 @@ async def purge_expired(db: AsyncSession, *, older_than_days: int = 7) -> int:
     result = await db.execute(
         delete(PasswordResetToken).where(PasswordResetToken.expires_at < cutoff)
     )
-    return int(result.rowcount or 0)
+    return affected_rows(result)

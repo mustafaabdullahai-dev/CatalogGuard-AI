@@ -277,7 +277,10 @@ async def csrf(request: Request, response: Response) -> CsrfTokenResponse:
     settings = get_settings()
     tokens = CSRFTokens(settings)
     existing = request.cookies.get(settings.csrf_cookie_name)
-    token = existing if tokens.valid(existing) else tokens.issue()
+    # Reissue only when the cookie is absent or not one we minted. Written as a
+    # statement rather than a conditional expression so the type of `token` is
+    # narrowed to `str` rather than staying `str | None`.
+    token = existing if existing is not None and tokens.valid(existing) else tokens.issue()
     if token != existing:
         response.set_cookie(
             key=settings.csrf_cookie_name,

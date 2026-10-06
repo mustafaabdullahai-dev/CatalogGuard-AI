@@ -32,7 +32,7 @@ from app.core.security.passwords import (
     needs_rehash,
     verify_password,
 )
-from app.models.tenancy import User, WorkspaceMembership
+from app.models.tenancy import AuthSession, User, WorkspaceMembership
 from app.services.auth import sessions, throttle
 
 
@@ -128,7 +128,7 @@ async def change_password(
     user: User,
     current_password: str,
     new_password: str,
-    current_session: sessions.AuthSession | None = None,
+    current_session: AuthSession | None = None,
 ) -> None:
     """Change a password and revoke every other session.
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -63,7 +63,7 @@ class InvitationRef(BaseModel):
     created_at: datetime
 
     @classmethod
-    def from_record(cls, record, *, invited_by: UUID) -> InvitationRef:
+    def from_record(cls, record: Any, *, invited_by: UUID) -> InvitationRef:
         if record.revoked_at is not None:
             status = "revoked"
         elif record.accepted_at is not None:

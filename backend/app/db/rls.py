@@ -33,6 +33,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from sqlalchemy import text
+from sqlalchemy.sql.elements import TextClause
 
 # Read by every policy. Named to be unmistakable in `pg_stat_activity` and in a
 # query log.
@@ -65,7 +66,7 @@ def _tenant_predicate() -> str:
     )
 
 
-def bind_tenant_statement(workspace_id: UUID | str) -> text:
+def bind_tenant_statement(workspace_id: UUID | str) -> TextClause:
     """Bind the current transaction to one workspace.
 
     Values are always bound, never interpolated, so a hostile value cannot
@@ -82,7 +83,7 @@ def bind_tenant_statement(workspace_id: UUID | str) -> text:
     )
 
 
-def clear_tenant_statement() -> text:
+def clear_tenant_statement() -> TextClause:
     """Clear the tenant context inside the current transaction.
 
     Needed after privileged work in the same transaction. Without it, a

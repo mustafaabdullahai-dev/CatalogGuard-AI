@@ -20,7 +20,7 @@ import secrets
 from hashlib import sha256
 
 from starlette.datastructures import Headers, MutableHeaders
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import Settings
 
@@ -59,7 +59,7 @@ class SecurityHeadersMiddleware:
             await self.app(scope, receive, send)
             return
 
-        async def send_with_headers(message) -> None:
+        async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 mutable = MutableHeaders(scope=message)
                 for key, value in self.headers.items():
@@ -179,7 +179,7 @@ class CSRFMiddleware:
         """Serve the request, adding the CSRF cookie to the response."""
         sent = False
 
-        async def send_with_cookie(message) -> None:
+        async def send_with_cookie(message: Message) -> None:
             nonlocal sent
             if message["type"] == "http.response.start" and not sent:
                 sent = True

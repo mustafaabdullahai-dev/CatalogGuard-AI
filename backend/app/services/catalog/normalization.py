@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
 # Canonical field names. Normalization can only produce one of these, so a
 # target is never invented.
@@ -415,7 +417,13 @@ def convert_measure(
     return converted.quantize(Decimal("0.01"))
 
 
-_VALUE_NORMALIZERS = {
+# `value` is deliberately untyped in the lambdas: each normalizer takes whatever
+# the supplier column actually held. The table's own type is annotated so the
+# untyped call at the use site is reported here, once, instead of at every
+# caller. Each entry returns `(normalized, rule_name)`; `normalized` may be None
+# to mean "not parseable", which leaves the field unmapped rather than guessed at
+# (D-015 rule 1).
+_VALUE_NORMALIZERS: dict[str, Callable[[Any], tuple[Any, str]]] = {
     "category_path": lambda value: (normalize_category_path(value), "category.path"),
     "color": lambda value: (normalize_text(value), "text.trim"),
     "size": lambda value: (normalize_text(value), "text.trim"),
