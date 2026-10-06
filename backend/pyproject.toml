@@ -93,5 +93,6 @@ markers = [
     "integration: requires live database or Redis",
     "agent: exercises LangGraph nodes and tools",
     "e2e: full workflow test",
+    "live_llm: calls a live LLM provider (opt-in via CATALOGGUARD_LIVE_LLM=1)",
     "slow: long-running",
 ]
