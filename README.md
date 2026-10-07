@@ -26,10 +26,13 @@ predicts a proposal's impact on a copy of the catalog before it is approved
 (§18, §19), and the approval center that decides those proposals — approve,
 reject, modify, request re-analysis, in bulk or one at a time, with every
 decision written to an immutable audit row (§20, §38, §39) — are complete and
-tested — **932 tests**, of which three are opt-in live-provider tests.
-The marketplace seam that Phase 20 will execute through exists too: one
-interface, one mock adapter, credentials encrypted at rest (§22, §33, D-005),
-with every live integration still deferred.
+tested, as is the execution engine that carries an approved change to a
+marketplace, reads it back to prove it landed, and rolls it back when it did
+not (§21, §51), with a `tool_calls` record of every tool invocation (§23) —
+all of it **956 tests**, of which three are opt-in live-provider tests.
+The marketplace seam those writes go through exists too: one interface, one
+mock adapter, credentials encrypted at rest (§22, §33, D-005), with every live
+integration still deferred.
 
 A live LLM provider **has** now been called three times: two schema-validated
 answers, fast and reasoning tier, plus a real tool call that resolved source
@@ -64,6 +67,7 @@ Every phase's delivery, gates and gaps are recorded in
 | Approval center: queue, four decisions, bulk low-risk, CRITICAL needs two approvers | Implemented, 33 tests |
 | Audit row per decision, `payload_hash` recomputable from the row (D-013) | Implemented, unit tested |
 | Marketplace seam: `MarketplaceConnector`, mock adapter, encrypted credentials (§22, §33, D-005) | Implemented, 32 tests; **no live adapter** — Shopify/Amazon/TikTok deferred |
+| Execution engine: pre-checks, verify-by-reread, bounded attempts, rollback (§21, §51, D-022) | Implemented, 15 tests; **no route or worker calls it**, and only `update_product` is reachable |
 | Compliance corpus: section-aware chunking, content-hash dedup (D-021) | Implemented, 52 tests |
 | Hybrid retrieval: GIN keyword `ts_rank` + pgvector cosine, deterministic rerank | Implemented, unit tested |
 | Compliance API: ingest / list / search with per-hit citations and a signal note | Implemented, 12 tests |
@@ -78,6 +82,7 @@ Every phase's delivery, gates and gaps are recorded in
 | LLM (Qroq) | **Wired and live-verified** — fast (`openai/gpt-oss-20b`) and reasoning (`openai/gpt-oss-120b`) confirmed against the endpoint; key still needs rotation |
 | Agent graph (§7 roles, §24 state, D-007 validation layer) | Implemented, 12 unit tests + 2 opt-in live tests |
 | Agent tools: normalize_field, resolve_source_authority, resolve_identity, assess_change_risk (§23) | Implemented, 30 tests + 1 opt-in live tool-call test; 4 of §23's 18 tools |
+| `tool_calls` and `agent_runs` records: one row per dispatch through `ToolRegistry`, arguments masked (§23, D-010) | Implemented, 9 tests; **nothing writes them in production** — no recorder attached to a live caller |
 | Sandbox simulation: §18 chain on a copy, §19 diff, `POST /change-proposals/{id}/simulate` | Implemented, 31 tests; compliance stage skipped (no corpus), route untested against a database |
 | Frontend: dashboard, catalog explorer, approval center | Implemented, unit tested |
 | Outbound mail transport | Not configured; messages queue to `email_outbox` (D-017) |
@@ -157,7 +162,7 @@ Swagger UI at `http://localhost:3000/docs` when the frontend proxies, or
 ### Tests and lint
 
 ```bash
-python -m pytest -q                   # 929 passed, 3 skipped, no database required
+python -m pytest -q                   # 953 passed, 3 skipped, no database required
 CATALOGGUARD_LIVE_LLM=1 python -m pytest tests/agent -q   # opt-in: 3 live LLM calls (2 schemas + 1 tool call)
 python -m ruff check app tests alembic scripts
 python -m mypy app

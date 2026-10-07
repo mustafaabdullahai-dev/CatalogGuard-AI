@@ -332,10 +332,16 @@ intake row
    │                      simulation run and the proposal's verdict; never the
    │                      product.
    │
-   └─► approval           §20/§38: a person decides. The risk band fixes how
-                          many approvers a proposal needs (two for CRITICAL),
-                          never whether it needs one. Writes the request, the
-                          action, the proposal's new status and an audit row.
+   ├─► approval           §20/§38: a person decides. The risk band fixes how
+   │                      many approvers a proposal needs (two for CRITICAL),
+   │                      never whether it needs one. Writes the request, the
+   │                      action, the proposal's new status and an audit row.
+   │
+   └─► execution          §21/§51: the only writer of a marketplace listing.
+                          Refuses anything unapproved *before* a job exists, then checks,
+                          dispatches, re-reads to verify, and rolls back from the state
+                          observed before the write. Bounded attempts; one audit row per
+                          outcome.
 ```
 
 The ordering matters and is enforced by types: identity returns a match, not a
@@ -347,12 +353,19 @@ The simulation takes a value snapshot rather than a session, so what it
 predicts is a property of the inputs: same change, same report.
 
 Approval is the one stage with no algorithm in it. Everything before it can
-run unattended, and everything after it is execution; the decision itself is
+run unattended, and execution is everything after it; the decision itself is
 the product's reason for existing (D-020), which is why no risk band, however
 low, skips it and why `require_approval_authority` guards every route in front
 of it. A stage that
 could not run reports `skipped`, which is not `passed` — a missing compliance
 corpus must never read as an approval.
+
+Execution is deliberately a single function rather than a stage: only
+`execute_proposal()` calls a marketplace to change something, so there is one
+place to check approval state, one place to bound attempts, and one place that
+can write a listing. Everything a caller can do to it before dispatch — an
+unapproved proposal, one already executed, a missing target — is refused
+without a job row, because no work was attempted.
 
 Where a value can be wrong in an unrecoverable way, the answer is a proposal.
 Where it is merely inconvenient, the answer is a finding. The distinction is the
@@ -415,9 +428,45 @@ app/connectors/
   `connector_for_connection` decrypts and dispatches. `marketplace_connections`
   has no plaintext credential column, and the test that matters reads the
   table's columns.
-- **Nothing in production calls it yet.** Phase 20's execution engine is the
-  first caller, so the seam is proven and unused — which is the state D-005
-  asked for.
+- **Its only caller is the execution engine, and that engine has no
+  dispatcher.** `execute_proposal` builds a connector per job (D-022); no
+  route, worker or scheduler invokes it, and every call in the suite lands on
+  `MockConnector` — which is the state D-005 asked for, now attached to a
+  second component.
+
+---
+
+## Execution (D-022, Phase 20)
+
+§21's chain in one place — `app/services/execution/engine.py`:
+
+- **Refusals are errors, failures are rows.** Not approved, already executed,
+  targets no product → `ExecutionRefusedError` before `execution_jobs` sees
+  anything. Everything after dispatch is a row with the error preserved and
+  per-outcome recovery instructions, because §21 asks for the failure to be
+  recorded and the recovery given, and rows outlive the process.
+- **Verify by re-reading.** After `update_product` the engine calls
+  `get_product` and compares. The write's own response is a claim by the
+  party that made the change; a second read is evidence. A marketplace that
+  normalised the value is caught here and rolled back rather than believed.
+- **Attempts are a database constraint, not a loop bound.**
+  `execution_jobs` has `CHECK (attempt_count <= max_attempts)`, and only
+  `ConnectorError.retryable` errors are repeated — rejected credentials stop
+  after one attempt, before any write.
+- **Rollback starts from data captured before the write.**
+  `previous_state` and `rollback_reference` are recorded on attempt 1, so a
+  restore never depends on state the write may have destroyed (§51).
+  `supports_rollback=False` means the job says so in words and leaves the
+  marketplace alone; a failed restore is `PARTIALLY_FAILED`, never `FAILED`
+  with an unrecorded mess.
+- **One audit row per outcome**, refusals included: who, which job, old and
+  new state, evidence, risk, the approval it executed under, and a
+  recomputable hash (D-013).
+- **Tool calls are rows too.** `ToolRegistry.execute` — the single dispatch
+  point — writes one `tool_calls` row per invocation through an optional
+  recorder, arguments masked (D-010), results stored as metadata rather than
+  content. A registry without a recorder writes nothing, which is how the
+  agent graph keeps its "no database writes by default" property.
 
 ---
 
@@ -458,10 +507,11 @@ marketplace listings. Telemetry must not leave our infrastructure.
 - **The marketplace seam has no traffic and no live adapter.** Every
   operation, refusal and credential path is exercised by tests against
   `MockConnector`, and nothing in production dispatches to it: no route
-  creates a `MarketplaceConnection` and no job calls a connector. Real rate
-  limits, auth expiry, pagination and partial failures are unvalidated, which
-  is the gap D-005 accepted and Phase 19 restated in the terms of what was
-  actually built.
+  creates a `MarketplaceConnection`, no route or worker calls
+  `execute_proposal`, and only `update_product` is reachable from a proposal
+  at all. Real rate limits, auth expiry, pagination and partial failures are
+  unvalidated, which is the gap D-005 accepted and Phase 19 restated in the
+  terms of what was actually built.
 - **The approval center needs a person to be watching.** The queue is
   pull-based: whoever with `approve` capability looks decides, nothing
   notifies anyone, and no approver can be assigned to a proposal beyond
@@ -515,7 +565,12 @@ marketplace listings. Telemetry must not leave our infrastructure.
   called by tests, nothing streams per-node progress to a client, no proposal
   it produces is persisted anywhere, and the lookups that would need a database
   have no tool because D-006 still records the database as unconfirmed.
-- **Execution path is mock-only.** Real marketplace rate limits and
-  partial-failure modes remain unvalidated.
+  Phase 20 added the `agent_runs`/`tool_calls` recording seam, so those rows
+  appear the moment a caller attaches a recorder — and no caller has.
+- **Execution is mock-only and undispatched.** The engine's verification,
+  retry, rollback and recovery text are proven against `MockConnector` and a
+  fake session; no marketplace has been written to, no HTTP route or worker
+  calls it, and the capability matrix has no `execute` capability — choosing
+  who may press that button is a decision, not a default.
 - **Dramatiq has no delayed-job scheduling.** Scheduled compliance scans will
   need APScheduler or cron-driven enqueue.
