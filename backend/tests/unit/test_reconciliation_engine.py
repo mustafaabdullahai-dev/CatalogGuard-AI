@@ -213,10 +213,16 @@ class TestReconciliationApi:
         assert "/api/v1/conflicts" in paths
         assert "/api/v1/change-proposals" in paths
         assert "/api/v1/reconciliation-runs" in paths
+        assert "/api/v1/change-proposals/{proposal_id}/simulate" in paths
+        # The spec must also say what it does: POST, with a response body.
+        simulate = paths["/api/v1/change-proposals/{proposal_id}/simulate"]["post"]
+        assert simulate["responses"]["200"]
 
     async def test_every_route_requires_a_session(self) -> None:
+        # https, not http: the CSRF cookie is `Secure`, and a jar that cannot
+        # send it back is refused by the middleware before the session check.
         async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
+            transport=ASGITransport(app=app), base_url="https://test"
         ) as client:
             for path in (
                 "/api/v1/conflicts",
@@ -225,6 +231,15 @@ class TestReconciliationApi:
             ):
                 response = await client.get(path)
                 assert response.status_code == 401, path
+            # A mutation is refused before the handler, so no proposal id is
+            # ever looked up: the blank UUID with a valid CSRF token still
+            # proves the session comes first.
+            token = (await client.get("/api/v1/auth/csrf")).json()["csrf_token"]
+            response = await client.post(
+                "/api/v1/change-proposals/00000000-0000-0000-0000-000000000000/simulate",
+                headers={"X-CSRF-Token": token},
+            )
+            assert response.status_code == 401
 
 
 

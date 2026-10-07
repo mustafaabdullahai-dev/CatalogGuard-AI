@@ -13,6 +13,7 @@ from app.models.reconciliation import (
     Conflict,
     ReconciliationRun,
     RiskAssessment,
+    SimulationRun,
 )
 
 
@@ -34,3 +35,7 @@ class ChangeProposalRepository(TenantRepository[ChangeProposal]):
 
 class RiskAssessmentRepository(TenantRepository[RiskAssessment]):
     model = RiskAssessment
+
+
+class SimulationRunRepository(TenantRepository[SimulationRun]):
+    model = SimulationRun

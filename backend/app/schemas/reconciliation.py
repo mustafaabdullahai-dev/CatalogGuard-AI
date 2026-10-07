@@ -124,6 +124,56 @@ class ChangeProposalListResponse(BaseModel):
     offset: int
 
 
+class SimulationResponse(BaseModel):
+    """One sandbox run (§18, §19): what the change *would* do.
+
+    `diff` and `impact_report` are returned in full rather than summarized into
+    a verdict — the point of a simulation is that a human reads it before
+    approving. A `None` flag means the stage did not run, and is never to be
+    read as `True`.
+    """
+
+    simulation_id: UUID
+    proposal_id: UUID
+    change_ref: str
+    validation_status: str
+    status: str
+    schema_valid: bool | None
+    relationship_valid: bool | None
+    compliance_valid: bool | None
+    seo_sensitive: bool
+    overall_risk: str
+    base_catalog_version: int
+    stages: list[dict[str, Any]]
+    validation_errors: list[str]
+    diff: dict[str, Any]
+    impact_report: dict[str, Any]
+    explanation: str
+
+    @classmethod
+    def from_result(
+        cls, *, simulation_id: UUID, proposal: Any, result: Any
+    ) -> SimulationResponse:
+        return cls(
+            simulation_id=simulation_id,
+            proposal_id=proposal.id,
+            change_ref=proposal.change_ref,
+            validation_status=result.validation_status,
+            status=str(result.proposal_status),
+            schema_valid=result.schema_valid,
+            relationship_valid=result.relationship_valid,
+            compliance_valid=result.compliance_valid,
+            seo_sensitive=result.seo_sensitive,
+            overall_risk=str(result.overall_risk),
+            base_catalog_version=result.base_catalog_version,
+            stages=[stage.as_dict() for stage in result.stages],
+            validation_errors=list(result.validation_errors),
+            diff=result.diff,
+            impact_report=result.impact_report,
+            explanation=result.explanation,
+        )
+
+
 class ReconciliationRunRef(BaseModel):
     id: UUID
     catalog_id: UUID

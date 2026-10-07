@@ -1,12 +1,14 @@
-"""Reconciliation endpoints (Phase 12, §11, §12, §15, §16).
+"""Reconciliation endpoints (Phase 12, §11, §12, §15, §16; Phase 17, §18).
 
-One mutating route that runs a pass over a catalog, and three read routes for
-what a pass produced: the conflicts it recorded, the proposals awaiting a human,
-and the runs themselves.
+Two mutating routes: one runs a pass over a catalog, the other runs one
+proposal through the sandbox and records what it predicted. The read routes
+report what a pass produced — the conflicts it recorded, the proposals awaiting
+a human, the runs themselves.
 
 Nothing here applies a change. The run records disagreement and proposes; the
-approval and execution paths are separate routers (Phases 18 and 20), so a bug in
-this one cannot reach a live marketplace listing.
+simulation predicts and stores a report; the approval and execution paths are
+separate routers (Phases 18 and 20), so a bug in this one cannot reach a live
+marketplace listing.
 """
 
 from __future__ import annotations
@@ -15,12 +17,13 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TenantScope, require_reconciliation_authority
 from app.core.logging import get_logger
 from app.db.session import get_session
+from app.models.catalog import Product, ProductRelationship
 from app.models.reconciliation import (
     ChangeProposal,
     Conflict,
@@ -34,13 +37,26 @@ from app.schemas.reconciliation import (
     ReconciliationResponse,
     ReconciliationRunListResponse,
     ReconciliationRunRef,
+    SimulationResponse,
 )
-from app.services.catalog.repositories import CatalogRepository
+from app.services.catalog.relationships import (
+    VARIATION_AXES,
+    RelationshipEdge,
+    TreeNode,
+)
+from app.services.catalog.repositories import CatalogRepository, ProductRepository
 from app.services.reconciliation import engine
 from app.services.reconciliation.repositories import (
     ChangeProposalRepository,
     ConflictRepository,
     ReconciliationRunRepository,
+)
+from app.services.simulation import (
+    CatalogSnapshot,
+    ProductState,
+    ProposedChange,
+    persist_simulation,
+    simulate,
 )
 
 router = APIRouter(tags=["reconciliation"])
@@ -165,6 +181,132 @@ async def list_change_proposals(
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+async def _snapshot_for(
+    db: AsyncSession,
+    scope: TenantScope,
+    *,
+    product: Product,
+    catalog_version: int,
+) -> CatalogSnapshot:
+    """Load enough of the tree to validate one proposal's move.
+
+    Not the whole catalog: a simulation answers "what does *this* change do",
+    and a field write can only disturb the product, its parent, its children
+    and their siblings. What the neighborhood does not contain is reported as
+    it was found, not guessed at — the next reconciliation pass reads the rest.
+    """
+    related = {product.id}
+    if product.parent_id is not None:
+        related.add(product.parent_id)
+    neighbors = await ProductRepository(db, scope.tenant).list(
+        limit=1000,
+        where=or_(Product.id.in_(related), Product.parent_id.in_(related)),
+    )
+    # A proposal's product may be the only row the query found (a brand-new
+    # catalog), and it must still appear in the tree it is being moved inside.
+    if not any(neighbor.id == product.id for neighbor in neighbors):
+        neighbors = [product, *neighbors]
+
+    nodes = tuple(
+        TreeNode(
+            id=neighbor.id,
+            sku=neighbor.sku,
+            title=neighbor.title,
+            is_parent=bool(neighbor.is_parent),
+            parent_id=neighbor.parent_id,
+            variation_attributes={
+                axis: neighbor.attributes[axis]
+                for axis in VARIATION_AXES
+                if neighbor.attributes.get(axis) not in (None, "")
+            },
+        )
+        for neighbor in neighbors
+    )
+    neighbor_ids = {neighbor.id for neighbor in neighbors}
+    rows = await db.execute(
+        select(ProductRelationship).where(
+            ProductRelationship.workspace_id == scope.workspace_id,
+            or_(
+                ProductRelationship.parent_id.in_(neighbor_ids),
+                ProductRelationship.child_id.in_(neighbor_ids),
+            ),
+        )
+    )
+    edges = tuple(
+        RelationshipEdge(
+            parent_id=relationship.parent_id,
+            child_id=relationship.child_id,
+            relationship_type=str(relationship.relationship_type),
+            established_by=relationship.established_by,
+            approved=relationship.approval_reference is not None,
+        )
+        for relationship in rows.scalars().all()
+    )
+    return CatalogSnapshot(
+        product=ProductState.from_product(product),
+        nodes=nodes,
+        edges=edges,
+        catalog_version=catalog_version,
+    )
+
+
+@router.post(
+    "/change-proposals/{proposal_id}/simulate",
+    response_model=SimulationResponse,
+    summary="Predict a proposal's impact without applying it (§18)",
+)
+async def simulate_change_proposal(
+    proposal_id: UUID,
+    scope: Annotated[TenantScope, Depends(require_reconciliation_authority())],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> SimulationResponse:
+    """Run §18's chain over a copy of the product and store what it predicted.
+
+    The product row is never written: the outcome lands in a `SimulationRun`,
+    and the proposal moves to `simulated` or `rejected_by_validation`. A
+    proposal whose product or catalog is gone has no row to copy, so it is
+    refused rather than simulated against a snapshot assembled from nothing.
+    """
+    proposal = await ChangeProposalRepository(db, scope.tenant).get(proposal_id)
+    if proposal is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="proposal not found"
+        )
+    if proposal.product_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="a proposal with no product has nothing to simulate",
+        )
+    product = await ProductRepository(db, scope.tenant).get(proposal.product_id)
+    if product is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="the product this proposal targets no longer exists",
+        )
+    catalog = await CatalogRepository(db, scope.tenant).get(product.catalog_id)
+    if catalog is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="the catalog this product belongs to no longer exists",
+        )
+
+    snapshot = await _snapshot_for(
+        db, scope, product=product, catalog_version=catalog.current_version
+    )
+    result = await simulate(ProposedChange.from_proposal(proposal), snapshot)
+    run = await persist_simulation(db, scope.tenant, proposal=proposal, result=result)
+    logger.info(
+        "simulation recorded",
+        proposal_id=str(proposal.id),
+        simulation_id=str(run.id),
+        validation_status=result.validation_status,
+        overall_risk=str(result.overall_risk),
+    )
+    return SimulationResponse.from_result(
+        simulation_id=run.id, proposal=proposal, result=result
     )
 
 
