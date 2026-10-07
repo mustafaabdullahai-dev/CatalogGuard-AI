@@ -241,6 +241,33 @@ Establishes a reliable core. Building connectors before the reconciliation, risk
 - **No compliance RAG in MVP.** Consequence: compliance findings in early versions are heuristic rather than rule-cited, which is a material difference from the Section 13 promise. Must be labelled honestly in the UI rather than presented as authoritative.
 - **No AI Copilot** (Phase 22). Users navigate via sidebar and command palette initially. The evidence-rich finding cards carry the AI value at MVP.
 
+### Amendment (Phase 19, 2026-10-07)
+
+The trade-off above required the seam; the seam now exists, so the deferral
+has a boundary instead of an absence.
+
+- **`MarketplaceConnector` carries §22's nine operations plus `rollback`.**
+  Rollback is §21's requirement and `supports_rollback` is its honesty check:
+  an adapter that cannot restore a previous state refuses the call rather than
+  reporting one. Errors form one vocabulary with a `retryable` flag, so a
+  bounded-retry loop decides by class instead of by parsing a message.
+- **One adapter: `MockConnector`.** In-memory, credential-checked, no clock
+  and no network. It deliberately does not simulate latency, OAuth or rate
+  limiting — a fabricated version of each would be tested as though it were
+  real. `fail_once` lets a caller prove its retry loop stops; that is the
+  behaviour worth checking before a marketplace exists.
+- **Registry, not branches.** `CONNECTOR_FACTORIES` holds `mock` and nothing
+  else. An unknown marketplace raises `UnknownMarketplaceError` naming what is
+  registered; falling back to the mock would report writes against a store
+  that does not exist. No module in `app/` is named after a deferred
+  marketplace, and a test asserts it.
+- **Credentials reach the database only through `encrypt_credentials()`**, and
+  `create_connection` is the first writer of `marketplace_connections` — the
+  claim in §33 and in this decision's column comment is now held by a test
+  that reads the table's columns, not by prose.
+- **Still true:** no live calls, and nothing in production calls the seam yet.
+  Phase 20 is its first caller.
+
 ---
 
 ## D-006 — Vector Store: PostgreSQL + pgvector
