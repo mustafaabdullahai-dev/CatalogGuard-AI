@@ -33,11 +33,13 @@ from app.agents.tools import (
 )
 from app.agents.tools.catalog import (
     ChangeRiskArgs,
+    ChangeRiskResult,
     IdentityMatchArgs,
     NormalizeFieldArgs,
     SourceAuthorityArgs,
 )
 from app.models.tenancy import UserRole
+from app.services.reconciliation.risk import WEIGHTS
 from tests.agent.test_graph import ScriptedCompleter, client, state
 
 INTAKE_OK = IntakeReport(
@@ -592,3 +594,23 @@ async def _call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
 async def _run(llm: Any, **kwargs: Any) -> Any:
 
     return await run_graph(state(), llm=llm, **kwargs)
+
+
+
+class TestRiskToolBounds:
+    """The risk tool must be able to return every factor the engine can score.
+
+    A truncated factor list is a total nobody can re-add, and Phase 16's exit
+    criterion is that the raw score stays recoverable from what was stored.
+    """
+
+    def test_the_result_model_fits_every_weighted_factor(self) -> None:
+        info = ChangeRiskResult.model_fields["factors"]
+        # `max_length` lives on the constraint in `metadata`, not on FieldInfo.
+        cap = next(
+            (m.max_length for m in info.metadata if hasattr(m, "max_length")), None
+        )
+        assert cap is not None, "the factor list must be length-bounded"
+        assert len(WEIGHTS) <= cap, (
+            f"{len(WEIGHTS)} factor codes but only {cap} fit in the tool result"
+        )

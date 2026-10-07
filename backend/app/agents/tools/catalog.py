@@ -206,6 +206,12 @@ class ChangeRiskArgs(ToolArgs):
         pattern=r"^\d{1,12}(\.\d{1,2})?$",
         description="Decimal amount as a string, so no float rounding reaches the score",
     )
+    inventory_units_affected: int = Field(
+        default=0,
+        ge=0,
+        le=1_000_000_000,
+        description="Units of stock this change moves, when the caller knows them",
+    )
 
 
 class RiskFactorResult(BaseModel):
@@ -218,7 +224,9 @@ class ChangeRiskResult(BaseModel):
     level: RiskLevel
     numeric_score: int
     requires_approval: bool
-    factors: list[RiskFactorResult] = Field(default_factory=list, max_length=20)
+    # Wide enough to hold every code in `WEIGHTS` (guarded by a test): a
+    # truncated factor list is a total nobody can re-add.
+    factors: list[RiskFactorResult] = Field(default_factory=list, max_length=30)
     escalated_reason: str | None = Field(default=None, max_length=300)
 
 
@@ -236,6 +244,7 @@ def _assess_change_risk(args: ChangeRiskArgs, _context: ToolContext) -> ChangeRi
         has_sales_history=args.has_sales_history,
         estimated_daily_units=args.estimated_daily_units,
         monthly_revenue_at_risk=revenue,
+        inventory_units_affected=args.inventory_units_affected,
     )
     result = assess_risk(change)
     return ChangeRiskResult(
@@ -244,7 +253,7 @@ def _assess_change_risk(args: ChangeRiskArgs, _context: ToolContext) -> ChangeRi
         requires_approval=result.requires_approval,
         factors=[
             RiskFactorResult(code=factor.code, weight=factor.weight, detail=factor.detail[:300])
-            for factor in result.factors[:20]
+            for factor in result.factors[:30]
         ],
         escalated_reason=None if result.escalated_reason is None else result.escalated_reason[:300],
     )

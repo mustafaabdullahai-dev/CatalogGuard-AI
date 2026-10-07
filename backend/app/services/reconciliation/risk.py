@@ -16,6 +16,38 @@ The floor rule
     Bands have a minimum. A GTIN change is CRITICAL even if the arithmetic says
     LOW, because the factors are a floor and not a ceiling: they cannot talk the
     engine down from a consequence that is irreversible regardless of context.
+
+Conformance to §16 (Phase 16)
+    §16 lists thirteen *potential* factors and one rule. The rule — the LLM does
+    not decide final risk — holds because nothing here reads a model. The
+    factors, checked one at a time against the table below:
+
+    | §16 factor | Scored as | Note |
+    |---|---|---|
+    | parent-child modification | `parent_child_modification` | |
+    | SKU modification | `sku_modification` | |
+    | GTIN modification | `gtin_modification` | floors to HIGH |
+    | variant modification | `variant_modification` | |
+    | category modification | `category_modification` | |
+    | SEO-sensitive field | `seo_sensitive_field` | |
+    | marketplace compliance | `compliance_violation`, `restriction_applied` | |
+    | product identity | `identity_mismatch`, plus the two above it | floors to HIGH |
+    | inventory impact | `inventory_impact` | |
+    | historical sales impact | `sales_impact`, `revenue_at_risk` | |
+    | URL impact | `url_or_slug_change` | |
+    | indexing impact | `seo_sensitive_field` + `url_or_slug_change` | see below |
+    | channel-specific constraints | `channel_breadth`, `marketplace_listing` | |
+
+    Two of those lines deserve the note they carry. *Indexing impact* is not a
+    separate weight: a change deindexes a page by changing how it is discovered
+    — its slug, its category, its SEO fields — and scoring those twice would
+    charge the same consequence twice, which is exactly what a reviewer cannot
+    check. *Inventory impact* was absent until Phase 16; it is now scored from
+    the field being touched or from the units the caller says are affected.
+
+    The bands are LOW / MEDIUM / HIGH / CRITICAL, from `THRESHOLDS`, and the
+    extra weights here are D-016's published table rather than §16's (§16 names
+    factors without weights): 21 codes, four bands, five floors.
 """
 
 from __future__ import annotations
@@ -66,6 +98,7 @@ class RiskContext:
     has_sales_history: bool = False
     estimated_daily_units: float = 0.0
     monthly_revenue_at_risk: Decimal = Decimal(0)
+    inventory_units_affected: int = 0
     compliance_violation_count: int = 0
     evidence_count: int = 0
     confidence: float = 1.0
@@ -96,6 +129,7 @@ WEIGHTS: dict[str, int] = {
     "compliance_violation": 40,
     "restriction_applied": 15,
     # Blast radius.
+    "inventory_impact": 20,
     "sales_impact": 20,
     "revenue_at_risk": 15,
     "bulk_change": 15,
@@ -123,6 +157,22 @@ RESTRICTION_FIELDS: frozenset[str] = frozenset(
     {"restricted", "restricted_reason", "compliance_status", "suppressed"}
 )
 TITLE_FIELDS: frozenset[str] = frozenset({"title", "product_title", "name"})
+# Stock levels. Products carry no inventory column today — the bag in
+# `attributes` is where a payload keeps them — so the field name is the only
+# signal the engine has that a change moves stock.
+INVENTORY_FIELDS: frozenset[str] = frozenset(
+    {
+        "stock",
+        "quantity",
+        "inventory",
+        "inventory_quantity",
+        "on_hand",
+        "available",
+        "stock_status",
+        "backorder",
+        "backorder_allowed",
+    }
+)
 DESCRIPTION_FIELDS: frozenset[str] = frozenset({"description", "long_description"})
 # Relationship types whose modification reshapes the product tree.
 STRUCTURAL_RELATIONSHIPS: frozenset[str] = frozenset(
@@ -136,6 +186,7 @@ STRUCTURAL_RELATIONSHIPS: frozenset[str] = frozenset(
 BULK_CHANNEL_THRESHOLD = 3
 BULK_PRODUCT_THRESHOLD = 25
 HIGH_DAILY_UNITS = 50.0
+HIGH_INVENTORY_UNITS = 100
 HIGH_REVENUE_AT_RISK = Decimal("10000")
 THIN_EVIDENCE_THRESHOLD = 2
 LOW_CONFIDENCE_THRESHOLD = 0.7
@@ -238,6 +289,15 @@ def assess(context: RiskContext) -> RiskResult:
         add("title_change", "the product title changes on live listings")
     if field_name in DESCRIPTION_FIELDS:
         add("description_change", "the product description changes")
+    if field_name in INVENTORY_FIELDS or context.inventory_units_affected >= HIGH_INVENTORY_UNITS:
+        # §16's inventory impact. A stock field moving risks a stock-out or an
+        # overstock in the direction nobody notices first, and the caller may
+        # know the blast radius even when the field name does not say it.
+        if context.inventory_units_affected >= HIGH_INVENTORY_UNITS:
+            detail = f"about {context.inventory_units_affected} units of stock are affected"
+        else:
+            detail = f"{context.field_name} moves stock levels"
+        add("inventory_impact", detail)
     if context.has_sales_history and context.estimated_daily_units >= HIGH_DAILY_UNITS:
         add(
             "sales_impact",
@@ -309,6 +369,7 @@ def context_from_change(
     has_sales_history: bool = False,
     estimated_daily_units: float = 0.0,
     monthly_revenue_at_risk: Decimal = Decimal(0),
+    inventory_units_affected: int = 0,
 ) -> RiskContext:
     """Build a `RiskContext` from a change proposal.
 
@@ -339,6 +400,7 @@ def context_from_change(
         has_sales_history=has_sales_history,
         estimated_daily_units=estimated_daily_units,
         monthly_revenue_at_risk=monthly_revenue_at_risk,
+        inventory_units_affected=max(inventory_units_affected, 0),
         compliance_violation_count=compliance_violation_count,
         evidence_count=len(evidence or ()),
         confidence=confidence,

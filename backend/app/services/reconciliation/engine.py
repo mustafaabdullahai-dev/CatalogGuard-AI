@@ -389,6 +389,24 @@ async def _persist_conflict(
     )
 
 
+def risk_assessment_for(proposal_id: UUID, risk: RiskResult) -> RiskAssessment:
+    """The `risk_assessments` row for one scored proposal, as a pure function.
+
+    Two rules live here together, and they are the reason this is not inline:
+    the stored score is clamped to the column's CHECK constraint (0..100) while
+    the factors are written in full, so adding them up recovers the raw total.
+    A capped number with no breakdown beside it is a number nobody can audit,
+    which is what Phase 16's third exit criterion asks for.
+    """
+    return RiskAssessment(
+        change_proposal_id=proposal_id,
+        risk_level=risk.level,
+        numeric_score=float(min(_MAX_STORED_SCORE, float(risk.numeric_score))),
+        factors=[factor.as_dict() for factor in risk.factors],
+        escalated_reason=risk.escalated_reason,
+    )
+
+
 async def _persist_proposal(
     db: AsyncSession,
     tenant: TenantContext,
@@ -433,13 +451,7 @@ async def _persist_proposal(
     )
     await ChangeProposalRepository(db, tenant).add(proposal)
     await RiskAssessmentRepository(db, tenant).add(
-        RiskAssessment(
-            change_proposal_id=proposal.id,
-            risk_level=plan.risk.level,
-            numeric_score=float(min(_MAX_STORED_SCORE, float(plan.risk.numeric_score))),
-            factors=[factor.as_dict() for factor in plan.risk.factors],
-            escalated_reason=plan.risk.escalated_reason,
-        )
+        risk_assessment_for(proposal.id, plan.risk)
     )
 
 

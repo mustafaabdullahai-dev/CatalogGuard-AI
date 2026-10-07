@@ -11,12 +11,14 @@ to predict the band from the factor table.
 
 from __future__ import annotations
 
+import inspect
 from decimal import Decimal
 
 import pytest
 
 from app.models.catalog import SourceType
 from app.models.reconciliation import ConflictType, RiskLevel
+from app.services.reconciliation import risk
 from app.services.reconciliation.conflicts import (
     ConflictSeverity,
     FieldObservation,
@@ -495,3 +497,159 @@ class TestRiskResultShape:
         assert payload["requires_approval"] is True
         assert payload["factors"]
         assert all({"code", "weight", "detail"} <= set(f) for f in payload["factors"])
+
+
+
+class TestSection16Conformance:
+    """§16 names thirteen potential factors. Phase 16 checked them one at a time.
+
+    The audit runs in both directions, because a factor can go missing either
+    way: one table says what §16 asked for and proves the engine scores it,
+    the other says which codes are *ours* — D-016's additions beyond §16 — so
+    a new code cannot be added without being assigned to one side or the
+    other.
+    """
+
+    # (§16's wording, the factor code it is scored as, a context that fires it)
+    SECTION_16: tuple[tuple[str, str, RiskContext], ...] = (
+        (
+            "parent-child modification",
+            "parent_child_modification",
+            RiskContext(field_name="price", affects_parent_child=True),
+        ),
+        ("SKU modification", "sku_modification", RiskContext(field_name="sku")),
+        ("GTIN modification", "gtin_modification", RiskContext(field_name="gtin")),
+        (
+            "variant modification",
+            "variant_modification",
+            RiskContext(field_name="color", affects_variants=True),
+        ),
+        (
+            "category modification",
+            "category_modification",
+            RiskContext(field_name="category_path", affects_category=True),
+        ),
+        (
+            "SEO-sensitive field",
+            "seo_sensitive_field",
+            RiskContext(field_name="handle"),
+        ),
+        (
+            "marketplace compliance",
+            "compliance_violation",
+            RiskContext(field_name="description", compliance_violation_count=2),
+        ),
+        (
+            "product identity",
+            "identity_mismatch",
+            RiskContext(field_name="mpn", is_identity_field=True),
+        ),
+        (
+            "inventory impact",
+            "inventory_impact",
+            RiskContext(field_name="on_hand"),
+        ),
+        (
+            "historical sales impact",
+            "sales_impact",
+            RiskContext(field_name="price", has_sales_history=True, estimated_daily_units=500),
+        ),
+        ("URL impact", "url_or_slug_change", RiskContext(field_name="slug")),
+        (
+            "indexing impact",
+            "seo_sensitive_field",
+            RiskContext(field_name="keywords"),
+        ),
+        (
+            "channel-specific constraints",
+            "channel_breadth",
+            RiskContext(field_name="price", affected_channel_count=5),
+        ),
+    )
+
+    # Codes that score a §16 concern without being named by it: §16 names
+    # "marketplace compliance" once, and D-016 scored the restriction and the
+    # revenue it exposes separately.
+    HANGS_OFF_A_SECTION_16_LINE = {
+        "marketplace_listing": "channel-specific constraints",
+        "restriction_applied": "marketplace compliance",
+        "revenue_at_risk": "historical sales impact",
+    }
+
+    # D-016 scored these too, and §16 does not name them at all. Listed so the
+    # two tables stay exhaustive together: every code is claimed by one or the other.
+    BEYOND_SECTION_16 = frozenset(
+        {
+            "product_deletion",
+            "broken_relationship",
+            "title_change",
+            "description_change",
+            "bulk_change",
+            "low_confidence",
+            "thin_evidence",
+        }
+    )
+
+    @pytest.mark.parametrize(
+        ("factor_name", "code", "context"),
+        SECTION_16,
+        ids=[row[0] for row in SECTION_16],
+    )
+    def test_each_section_16_factor_is_scored(
+        self, factor_name: str, code: str, context: RiskContext
+    ) -> None:
+        assert code in WEIGHTS, f"§16's {factor_name!r} has no weight"
+        assert code in {f.code for f in assess(context).factors}, (
+            f"a change of the shape {context.field_name!r} does not score §16's "
+            f"{factor_name!r}"
+        )
+
+    def test_every_weight_is_claimed_by_section_16_or_by_d_016(self) -> None:
+        named = {code for _, code, _ in self.SECTION_16} | set(self.HANGS_OFF_A_SECTION_16_LINE)
+        assert WEIGHTS.keys() - named == set(self.BEYOND_SECTION_16)
+        assert named - WEIGHTS.keys() == set()
+        assert set(self.HANGS_OFF_A_SECTION_16_LINE.values()) <= {
+            name for name, _, _ in self.SECTION_16
+        }
+
+    def test_the_conformance_table_in_the_module_matches_this_one(self) -> None:
+        """The table in `risk.py` is the one a reviewer reads at the code."""
+        source = inspect.getsource(risk)
+        table = source[source.index("| §16 factor") : source.index("Two of those lines")]
+        for factor_name, _, _ in self.SECTION_16:
+            assert f"| {factor_name} |" in table, factor_name
+
+    def test_inventory_units_below_the_threshold_score_nothing_extra(self) -> None:
+        result = assess(
+            context_from_change(
+                field_name="price", inventory_units_affected=99, evidence=[1, 2, 3]
+            )
+        )
+        assert "inventory_impact" not in {f.code for f in result.factors}
+
+    def test_inventory_units_at_the_threshold_score_the_factor(self) -> None:
+        result = assess(
+            context_from_change(
+                field_name="price", inventory_units_affected=100, evidence=[1, 2, 3]
+            )
+        )
+        assert {f.code for f in result.factors} == {"inventory_impact"}
+        assert result.numeric_score == WEIGHTS["inventory_impact"]
+
+    def test_a_negative_unit_count_is_clamped_to_not_affect_the_score(self) -> None:
+        context = context_from_change(
+            field_name="price", inventory_units_affected=-5, evidence=[1, 2, 3]
+        )
+        assert context.inventory_units_affected == 0
+        assert "inventory_impact" not in {f.code for f in assess(context).factors}
+
+    def test_an_inventory_change_still_adds_up(self) -> None:
+        result = assess(
+            context_from_change(
+                field_name="stock",
+                affected_channels=["amazon"],
+                evidence=[1, 2, 3],
+            )
+        )
+        assert result.numeric_score == sum(f.weight for f in result.factors)
+        assert {f.code for f in result.factors} == {"inventory_impact", "marketplace_listing"}

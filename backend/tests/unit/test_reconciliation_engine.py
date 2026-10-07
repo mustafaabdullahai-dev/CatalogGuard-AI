@@ -11,6 +11,7 @@ run is exercised through the same functions these test, not through a server.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from uuid import uuid4
 
 import httpx
@@ -28,7 +29,9 @@ from app.services.reconciliation.engine import (
     change_ref,
     plan_proposals,
     product_values,
+    risk_assessment_for,
 )
+from app.services.reconciliation.risk import assess, context_from_change
 
 CATALOG_ID = uuid4()
 PRODUCT_ID = uuid4()
@@ -223,3 +226,48 @@ class TestReconciliationApi:
                 response = await client.get(path)
                 assert response.status_code == 401, path
 
+
+
+
+class TestRiskEvidenceIsStored:
+    """Phase 16's third exit criterion: the factors stay beside the score.
+
+    The row stores a score clamped to the column's 0..100 constraint, so the
+    raw total is only recoverable if the factors are written in full. That
+    pairing — capped number, complete breakdown — is asserted here rather than
+    left to whoever reads `_persist_proposal`.
+    """
+
+    def test_the_row_keeps_every_factor_and_the_level_it_earned(self) -> None:
+        result = assess(
+            context_from_change(
+                field_name="title", affected_channels=["amazon"], evidence=[1, 2, 3]
+            )
+        )
+        row = risk_assessment_for(PRODUCT_ID, result)
+
+        assert row.risk_level is result.level
+        assert row.escalated_reason == result.escalated_reason
+        assert row.factors == [factor.as_dict() for factor in result.factors]
+        assert sum(factor["weight"] for factor in row.factors) == result.numeric_score
+
+    def test_a_capped_score_is_still_recoverable_from_the_factors(self) -> None:
+        """A score over 100 is stored as 100 and loses nothing but the digit."""
+        result = assess(
+            context_from_change(
+                field_name="gtin",
+                affected_channels=["amazon", "shopify", "walmart", "ebay", "etsy"],
+                has_sales_history=True,
+                estimated_daily_units=500,
+                monthly_revenue_at_risk=Decimal("50000"),
+                affected_product_ids=[str(uuid4()) for _ in range(50)],
+                confidence=0.2,
+                evidence=[],
+            )
+        )
+        assert result.numeric_score > 100, "the clamp must actually be exercised"
+
+        row = risk_assessment_for(PRODUCT_ID, result)
+        assert row.numeric_score == 100.0
+        assert sum(factor["weight"] for factor in row.factors) == result.numeric_score
+        assert len(row.factors) == len(result.factors)

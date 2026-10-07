@@ -794,6 +794,23 @@ consequence that does not shrink because the arithmetic came out low.
 - **Binary risky / not risky.** §16 asks for four bands, and the middle two are
   where review effort actually goes.
 
+### Amendment (Phase 16, 2026-10-06)
+
+Checked against §16 rather than against this decision alone, as the phase's
+first exit criterion requires. §16's thirteen potential factors are now all
+scored — **inventory impact** was the one missing and gained a weight
+(`inventory_impact`, 20, fired by the field being touched or by the units a
+caller says are affected). Two §16 lines share codes deliberately: *indexing
+impact* is scored through `seo_sensitive_field` and `url_or_slug_change`,
+because charging a deindexing twice would charge the same consequence twice.
+
+Seven codes remain D-016's own, unnamed in §16: `product_deletion`,
+`broken_relationship`, `title_change`, `description_change`, `bulk_change`,
+`low_confidence`, `thin_evidence`. The table in
+`backend/app/services/reconciliation/risk.py` is the one to read, and the test
+that keeps both tables exhaustive is
+`TestSection16Conformance.test_every_weight_is_claimed_by_section_16_or_by_d_016`.
+
 ## D-017 — Account Recovery and Invitations: Outbox Delivery, Sessions Revoked
 
 **Phase:** 11 — Password reset and self-service onboarding
