@@ -9,9 +9,9 @@ simulates. Humans approve. Connectors execute. Logs remember.
 
 ## Current status
 
-**Phases 8–17: authentication, catalog domain, conflicts, risk, ingestion, the
+**Phases 8–18: authentication, catalog domain, conflicts, risk, ingestion, the
 canonical model, reconciliation, the compliance corpus, LangGraph orchestration,
-AI tools and sandbox simulation.** Sign-in, tenant isolation, the catalog domain
+AI tools, sandbox simulation and the approval workflow.** Sign-in, tenant isolation, the catalog domain
 (normalization, identity, relationships, source authority), conflict detection,
 deterministic risk scoring, catalog ingestion (validation, CSV/JSON/Excel parsing,
 schema detection and raw storage), canonicalization (raw records → `products`,
@@ -22,8 +22,10 @@ agent graph (intake → normalize → analyze → finalize, with D-007's schema
 validation and bounded repair on every model call), four read-only agent tools
 the graph can call through a bounded tool loop (§23), and the sandbox that
 predicts a proposal's impact on a copy of the catalog before it is approved
-(§18, §19) are complete and tested — **867 tests**, of which three are opt-in
-live-provider tests.
+(§18, §19), and the approval center that decides those proposals — approve,
+reject, modify, request re-analysis, in bulk or one at a time, with every
+decision written to an immutable audit row (§20, §38, §39) — are complete and
+tested — **900 tests**, of which three are opt-in live-provider tests.
 
 A live LLM provider **has** now been called three times: two schema-validated
 answers, fast and reasoning tier, plus a real tool call that resolved source
@@ -55,6 +57,8 @@ Every phase's delivery, gates and gaps are recorded in
 | Reconciliation engine: source authority → conflicts → risk-scored proposals (D-020) | Implemented, 12 tests |
 | Change proposals, risk assessments, runs | Implemented, unit tested |
 | Re-run supersede (no duplicate approval queue) | Implemented, unit tested |
+| Approval center: queue, four decisions, bulk low-risk, CRITICAL needs two approvers | Implemented, 33 tests |
+| Audit row per decision, `payload_hash` recomputable from the row (D-013) | Implemented, unit tested |
 | Compliance corpus: section-aware chunking, content-hash dedup (D-021) | Implemented, 52 tests |
 | Hybrid retrieval: GIN keyword `ts_rank` + pgvector cosine, deterministic rerank | Implemented, unit tested |
 | Compliance API: ingest / list / search with per-hit citations and a signal note | Implemented, 12 tests |
@@ -148,7 +152,7 @@ Swagger UI at `http://localhost:3000/docs` when the frontend proxies, or
 ### Tests and lint
 
 ```bash
-python -m pytest -q                   # 864 passed, 3 skipped, no database required
+python -m pytest -q                   # 897 passed, 3 skipped, no database required
 CATALOGGUARD_LIVE_LLM=1 python -m pytest tests/agent -q   # opt-in: 3 live LLM calls (2 schemas + 1 tool call)
 python -m ruff check app tests alembic scripts
 python -m mypy app

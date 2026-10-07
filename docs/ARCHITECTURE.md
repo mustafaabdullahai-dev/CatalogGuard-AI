@@ -326,11 +326,16 @@ intake row
    ├─► risk               fixed weights, four bands, floors for identity,
    │                      deletion, relationship and compliance consequences
    │
-   └─► simulation         §18 chain on a *copy*: relationships → schema →
-                          compliance → SEO → conflicts, then the §19 diff,
-                          the impact report and an explanation. Writes a
-                          simulation run and the proposal's verdict; never the
-                          product.
+   ├─► simulation         §18 chain on a *copy*: relationships → schema →
+   │                      compliance → SEO → conflicts, then the §19 diff,
+   │                      the impact report and an explanation. Writes a
+   │                      simulation run and the proposal's verdict; never the
+   │                      product.
+   │
+   └─► approval           §20/§38: a person decides. The risk band fixes how
+                          many approvers a proposal needs (two for CRITICAL),
+                          never whether it needs one. Writes the request, the
+                          action, the proposal's new status and an audit row.
 ```
 
 The ordering matters and is enforced by types: identity returns a match, not a
@@ -339,7 +344,13 @@ product row; conflict detection returns a `DetectedConflict`, not a
 object. Each stage can be tested, explained, and replaced on its own.
 
 The simulation takes a value snapshot rather than a session, so what it
-predicts is a property of the inputs: same change, same report. A stage that
+predicts is a property of the inputs: same change, same report.
+
+Approval is the one stage with no algorithm in it. Everything before it can
+run unattended, and everything after it is execution; the decision itself is
+the product's reason for existing (D-020), which is why no risk band, however
+low, skips it and why `require_approval_authority` guards every route in front
+of it. A stage that
 could not run reports `skipped`, which is not `passed` — a missing compliance
 corpus must never read as an approval.
 
@@ -410,6 +421,17 @@ marketplace listings. Telemetry must not leave our infrastructure.
   diff also compares against the catalog's current value rather than the
   baseline the proposal was written against, so a stale proposal is not
   rejected for being stale.
+- **The approval center needs a person to be watching.** The queue is
+  pull-based: whoever with `approve` capability looks decides, nothing
+  notifies anyone, and no approver can be assigned to a proposal beyond
+  whoever acts first. There is also no configurable automation policy for
+  low-risk proposals — §38 offers one as an option and D-020 declined it for
+  the MVP, so "approve all low-risk" is a bulk human action instead.
+- **The audit hash is content, not a chain.** `audit_logs.payload_hash` is
+  recomputable from the row's own fields, so an edit to a row is visible to
+  anyone who checks; but the table has no previous-hash column, so a rewrite of
+  a row and its hash together is not. See `docs/phases/phase-18-approval-workflow.md`
+  for the rest of that phase's gaps.
 - **Risk weights are opinionated and not cross-interacting.** Weights encode a
   view about which changes are costly (D-016). Interaction terms would compound
   scores in ways a reviewer cannot check. §16's thirteen factors were audited

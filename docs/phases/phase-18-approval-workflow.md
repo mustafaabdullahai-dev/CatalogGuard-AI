@@ -5,7 +5,7 @@
 **Governing sections:** §15 change proposal engine, §20 approval center,
 §38 human-in-the-loop, §39 auditability
 **Decisions:** [D-020](../../DECISIONS.md) amended 2026-10-07 (the approver count)
-**Commit:** `_CODE_COMMIT_` (2026-10-07)
+**Commit:** `e11d29b` (2026-10-07)
 
 ## What this phase delivered
 
