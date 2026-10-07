@@ -13,11 +13,17 @@ from app.agents.tools.catalog import (
     NORMALIZE_FIELD,
     SOURCE_AUTHORITY,
 )
+from app.agents.tools.recording import (
+    DatabaseToolRecorder,
+    finish_agent_run,
+    start_agent_run,
+)
 from app.agents.tools.spec import (
     DEFAULT_MAX_OUTPUT_CHARS,
     TOOL_OUTPUT_POLICY,
     ToolCall,
     ToolCallOutcome,
+    ToolCallRecorder,
     ToolContext,
     ToolRegistry,
     ToolSpec,
@@ -26,19 +32,28 @@ from app.agents.tools.spec import (
 from app.core.config import get_settings
 
 
-def default_registry(*, max_output_chars: int | None = None) -> ToolRegistry:
+def default_registry(
+    *,
+    max_output_chars: int | None = None,
+    recorder: ToolCallRecorder | None = None,
+) -> ToolRegistry:
     """Every read-only tool this phase ships.
 
     Sized from configuration so the budget a tool's output is held to is
-    operator-visible rather than buried in a constant.
+    operator-visible rather than buried in a constant. `recorder` is None
+    unless a caller wants `tool_calls` rows: the graph stays out of the
+    database by default, as Phase 14 wrote it.
     """
     if max_output_chars is None:
         max_output_chars = get_settings().tool_output_max_chars
-    return ToolRegistry(DEFAULT_TOOLS, max_output_chars=max_output_chars)
+    return ToolRegistry(
+        DEFAULT_TOOLS, max_output_chars=max_output_chars, recorder=recorder
+    )
 
 
 __all__ = [
     "CHANGE_RISK",
+    "DatabaseToolRecorder",
     "DEFAULT_MAX_OUTPUT_CHARS",
     "DEFAULT_TOOLS",
     "IDENTITY_MATCH",
@@ -47,9 +62,12 @@ __all__ = [
     "TOOL_OUTPUT_POLICY",
     "ToolCall",
     "ToolCallOutcome",
+    "ToolCallRecorder",
     "ToolContext",
     "ToolRegistry",
     "ToolSpec",
     "default_registry",
+    "finish_agent_run",
+    "start_agent_run",
     "wrap_tool_result",
 ]

@@ -14,6 +14,7 @@ from app.models.reconciliation import (
     AuditLog,
     ChangeProposal,
     Conflict,
+    ExecutionJob,
     ReconciliationRun,
     RiskAssessment,
     SimulationRun,
@@ -50,6 +51,10 @@ class ApprovalRequestRepository(TenantRepository[ApprovalRequest]):
 
 class ApprovalActionRepository(TenantRepository[ApprovalAction]):
     model = ApprovalAction
+
+
+class ExecutionJobRepository(TenantRepository[ExecutionJob]):
+    model = ExecutionJob
 
 
 class AuditLogRepository(TenantRepository[AuditLog]):

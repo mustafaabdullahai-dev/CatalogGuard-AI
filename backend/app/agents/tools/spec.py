@@ -33,7 +33,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -136,6 +136,21 @@ class ToolCallOutcome(BaseModel):
         return not self.ok
 
 
+@runtime_checkable
+class ToolCallRecorder(Protocol):
+    """Keeps a record of one invocation (§23's logging, Phase 20).
+
+    Separate from the registry so that recording is optional and injectable:
+    a registry with no recorder is the Phase 15 behaviour exactly, which is
+    what keeps the graph free of database concerns until a caller asks for
+    records.
+    """
+
+    async def record(
+        self, *, name: str, arguments: dict[str, Any], outcome: ToolCallOutcome
+    ) -> None: ...
+
+
 def wrap_tool_result(name: str, content: str) -> str:
     """Delimit one result so its text cannot pass for something else (§34).
 
@@ -165,9 +180,11 @@ class ToolRegistry:
         specs: Iterable[ToolSpec] = (),
         *,
         max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
+        recorder: ToolCallRecorder | None = None,
     ) -> None:
         self._specs: dict[str, ToolSpec] = {}
         self._max_output_chars = max_output_chars
+        self._recorder = recorder
         for spec in specs:
             self.register(spec)
 
@@ -211,6 +228,7 @@ class ToolRegistry:
         return ToolRegistry(
             [self._specs[name] for name in names],
             max_output_chars=self._max_output_chars,
+            recorder=self._recorder,
         )
 
     def __len__(self) -> int:
@@ -223,7 +241,36 @@ class ToolRegistry:
         *,
         context: ToolContext,
     ) -> ToolCallOutcome:
-        """Run one call. Never raises: every failure comes back as JSON data."""
+        """Run one call. Never raises: every failure comes back as JSON data.
+
+        Recording happens here rather than inside `_run` so that every path —
+        unknown tool, refused role, bad arguments, success — produces a row,
+        and so that a recorder which cannot write does not break the property
+        this method promises. §23's "logging" is a requirement on the tool, not
+        a reason for the model to lose its answer.
+        """
+        outcome = await self._run(name, arguments, context=context)
+        if self._recorder is not None:
+            try:
+                await self._recorder.record(
+                    name=name, arguments=arguments, outcome=outcome
+                )
+            except Exception as exc:  # noqa: BLE001 - never fail the call
+                logger.warning(
+                    "tool_call_recording_failed",
+                    tool=name,
+                    error_type=type(exc).__name__,
+                    workspace_id=context.workspace_id,
+                )
+        return outcome
+
+    async def _run(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        context: ToolContext,
+    ) -> ToolCallOutcome:
         started = time.perf_counter()
         spec = self._specs.get(name)
 

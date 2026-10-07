@@ -17,8 +17,6 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
-from sqlalchemy.sql import operators
-from sqlalchemy.sql.elements import BinaryExpression, BooleanClauseList
 
 from app.db.base import TenantContext
 from app.models.reconciliation import (
@@ -38,74 +36,13 @@ from app.services.approval import (
 )
 from app.services.audit import audit_log_for, payload_hash, recomputed_hash
 from app.services.reconciliation.repositories import ApprovalRequestRepository
+from tests.unit.fakes import fake_session
+from tests.unit.fakes import written as _written
 
 WORKSPACE = uuid4()
 ACTOR_ONE = uuid4()
 ACTOR_TWO = uuid4()
 
-
-def _matches(row: Any, clause: Any) -> bool:
-    """Evaluate the equality clauses these queries use, against one row.
-
-    The workflow only ever asks `=`, `AND` and `OR`, so a small evaluator is
-    enough — and it is what makes the fake able to answer "the request you
-    already opened" instead of "nothing", which is the difference between
-    testing the state machine and testing that it never reads.
-    """
-    if clause is None:
-        return True
-    if isinstance(clause, BooleanClauseList):
-        results = [_matches(row, part) for part in clause.clauses]
-        return all(results) if clause.operator is operators.and_ else any(results)
-    if isinstance(clause, BinaryExpression) and clause.operator is operators.eq:
-        return getattr(row, clause.left.key, object()) == clause.right.value
-    if isinstance(clause, BinaryExpression) and clause.operator is operators.in_op:
-        return getattr(row, clause.left.key, object()) in clause.right.value
-    if isinstance(clause, BinaryExpression) and clause.operator is operators.is_:
-        # The tenant scoping adds `deleted_at IS NULL`.
-        wanted = clause.right.value if hasattr(clause.right, "value") else None
-        return getattr(row, clause.left.key, object()) is wanted
-    raise AssertionError(f"unhandled clause in fake session: {clause!r}")
-
-
-def _session() -> MagicMock:
-    """A session that stores what it is given and answers queries about it.
-
-    Reads run against the rows `add` has received, filtered by the statement's
-    own where clause. That is what lets one test follow a request from its
-    creation to its second approval without a database.
-    """
-    session = MagicMock()
-    session.rows: list[Any] = []
-
-    def add(row: Any) -> Any:
-        # Mimic the INSERT SQLAlchemy would do: the primary key default fires
-        # at flush time, so a row the fake holds without one would be
-        # indistinguishable from every other row to the queries below.
-        if getattr(row, "id", None) is None:
-            row.id = uuid4()
-        session.rows.append(row)
-        return row
-
-    session.add = MagicMock(side_effect=add)
-    session.flush = AsyncMock(return_value=None)
-
-    async def execute(statement: Any) -> MagicMock:
-        entity = statement.column_descriptions[0]["entity"]
-        clause = getattr(statement, "whereclause", None)
-        matched = [
-            row
-            for row in session.rows
-            if isinstance(row, entity) and _matches(row, clause)
-        ]
-        result = MagicMock()
-        result.scalars.return_value = result
-        result.all.return_value = matched
-        result.scalar_one_or_none.return_value = matched[0] if matched else None
-        return result
-
-    session.execute = AsyncMock(side_effect=execute)
-    return session
 
 
 def _proposal(**overrides: Any) -> ChangeProposal:
@@ -131,10 +68,6 @@ def _proposal(**overrides: Any) -> ChangeProposal:
 
 def _tenant() -> TenantContext:
     return TenantContext(workspace_id=WORKSPACE, user_id=ACTOR_ONE)
-
-
-def _written(session: MagicMock) -> list[Any]:
-    return [call.args[0] for call in session.add.call_args_list]
 
 
 class TestHowManyApprovers:
@@ -187,7 +120,7 @@ class TestWhatMayBeDecided:
         assert status.value in reason
 
     async def test_the_gate_fires_before_any_row_is_written(self) -> None:
-        session = _session()
+        session = fake_session()
         proposal = _proposal(status=ProposalStatus.APPROVED)
 
         with pytest.raises(NotApprovableError):
@@ -204,7 +137,7 @@ class TestWhatMayBeDecided:
 
 class TestApprovalsAccumulate:
     async def test_a_critical_change_needs_two_different_people(self) -> None:
-        session = _session()
+        session = fake_session()
         proposal = _proposal(risk_level=RiskLevel.CRITICAL)
 
         first = await record_decision(
@@ -238,7 +171,7 @@ class TestApprovalsAccumulate:
         assert second.proposal.status is ProposalStatus.APPROVED
 
     async def test_the_same_person_cannot_approve_twice(self) -> None:
-        session = _session()
+        session = fake_session()
         proposal = _proposal(risk_level=RiskLevel.CRITICAL)
 
         await record_decision(
@@ -259,7 +192,7 @@ class TestApprovalsAccumulate:
             )
 
     async def test_one_approval_closes_a_low_risk_change(self) -> None:
-        session = _session()
+        session = fake_session()
         proposal = _proposal(risk_level=RiskLevel.LOW)
 
         outcome = await record_decision(
@@ -277,7 +210,7 @@ class TestApprovalsAccumulate:
 
 class TestRejection:
     async def test_one_rejection_is_final_and_carries_its_reason(self) -> None:
-        session = _session()
+        session = fake_session()
         proposal = _proposal(risk_level=RiskLevel.CRITICAL)
 
         outcome = await record_decision(
@@ -295,7 +228,7 @@ class TestRejection:
         assert outcome.action.notes == "the colour is discontinued"
 
     async def test_a_rejection_without_a_reason_is_refused(self) -> None:
-        session = _session()
+        session = fake_session()
         proposal = _proposal()
 
         with pytest.raises(ApprovalError, match="reason"):
@@ -313,7 +246,7 @@ class TestRejection:
 
 class TestModification:
     async def test_a_modified_value_goes_back_through_the_sandbox(self) -> None:
-        session = _session()
+        session = fake_session()
         proposal = _proposal()
 
         outcome = await record_decision(
@@ -332,7 +265,7 @@ class TestModification:
         assert outcome.request.status == "modified"
 
     async def test_a_modification_without_a_value_is_refused(self) -> None:
-        session = _session()
+        session = fake_session()
         proposal = _proposal()
 
         with pytest.raises(ApprovalError, match="edited value"):
@@ -349,7 +282,7 @@ class TestModification:
 
     async def test_the_next_decision_opens_a_fresh_request(self) -> None:
         """Approvals recorded against the old value must not carry over."""
-        session = _session()
+        session = fake_session()
         proposal = _proposal(risk_level=RiskLevel.CRITICAL)
 
         await record_decision(
@@ -387,7 +320,7 @@ class TestModification:
 
 class TestReAnalysis:
     async def test_it_sends_the_proposal_back_to_the_sandbox(self) -> None:
-        session = _session()
+        session = fake_session()
         proposal = _proposal()
 
         outcome = await record_decision(
@@ -409,7 +342,7 @@ class TestAuditTrail:
     async def test_every_decision_writes_a_row_that_names_what_it_decided(
         self,
     ) -> None:
-        session = _session()
+        session = fake_session()
         proposal = _proposal(risk_level=RiskLevel.CRITICAL)
 
         outcome = await record_decision(
@@ -463,7 +396,7 @@ class TestAuditTrail:
 
 class TestOpenRequest:
     async def test_it_reuses_an_open_request_rather_than_opening_a_second(self) -> None:
-        session = _session()
+        session = fake_session()
         proposal = _proposal()
         repository = ApprovalRequestRepository(session, _tenant())
         existing = await repository.add(

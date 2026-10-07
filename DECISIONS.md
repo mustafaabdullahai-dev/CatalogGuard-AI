@@ -1321,3 +1321,97 @@ document, embedded it, indexed it or searched it.
 - **A compliance verdict from this router.** D-005 rules out a rule-cited
   compliance engine in the MVP; these routes supply evidence and the UI must
   label early compliance findings as heuristic.
+
+---
+
+## D-022 — Execution: One Writer, Bounded Attempts, Rollback From Observed State
+
+**Status:** Implemented (Phase 20). Unverified against a live marketplace — no connector other than the mock exists.
+
+### Decision
+
+- **One writer.** `execute_proposal()` is the only code path that changes a
+  listing. Refusals (not approved, already executed, targets no product) raise
+  `ExecutionRefusedError` before a job row exists; anything that fails after
+  dispatch is an `execution_jobs` row with the original error preserved and
+  recovery instructions written per outcome (§21).
+- **Verification is a re-read, not the write's return value.** After
+  `update_product` the engine calls `get_product` and compares. A mismatch is
+  retried inside the same bounded budget, then rolled back with the value it
+  actually reads recorded in the error.
+- **Attempts are bounded by the database.** `attempt_count <= max_attempts`
+  is a `CHECK` on `execution_jobs` (default 3), and only
+  `ConnectorError.retryable` errors are retried — rejected credentials and
+  unknown ids stop after one attempt.
+- **Rollback is automatic when the adapter declares it, from the state
+  observed before the first write.** `previous_state` and
+  `rollback_reference` are captured before dispatch, so a restore can never
+  depend on data the write may have changed. No rollback capability means
+  `rollback_supported=False` and instructions saying restoration is manual
+  (§51); a rollback that itself fails lands at `PARTIALLY_FAILED`.
+- **The target is resolved from `marketplace_products.external_product_id`,
+  never stored on the job.** A missing listing is a recoverable failure with
+  "sync the product" instructions, not a programming error.
+- **Tool calls are recorded at the single dispatch point.** An optional
+  recorder on `ToolRegistry` (arguments masked per D-010, results stored as
+  metadata) writes one `tool_calls` row per invocation; registries built
+  without a recorder write nothing, keeping the graph free of database writes
+  by default (D-016-era contract).
+
+### Context
+
+§21 defines execution as validate → dispatch → validate response → verify →
+log, with recovery instructions on failure; §51 requires rollback to be
+designed before the first live write and forbids promising universal rollback;
+§23 requires a tool-call record. Phases 17–19 built proposals, approvals and
+the connector seam, so `execute_proposal` is the seam's first real caller and
+`execution_jobs` (D-006 schema) had no writer.
+
+### Rationale
+
+- **A refusal that becomes a row claims work that never began.** Nothing was
+  dispatched, so the honest record is an error to the caller, not a job whose
+  attempts, response and recovery text are all empty. Failures after dispatch
+  must be rows: §21 asks for the error preserved and the failure recorded, and
+  rows survive the process.
+- **The write's return value is a claim by the same party that made the
+  change.** Only re-reading the listing shows what the marketplace kept,
+  which is why verification is a second `get_product` in every successful test.
+- **Rollback cannot depend on "before".** Storing the state we intend to
+  restore is the only way to guarantee it exists when the write fails
+  halfway; reading it after a failure would restore whatever is there now.
+- **A generic failure message is a support ticket waiting to happen.**
+  "Validation was pending, no call was made", "credentials rejected on
+  attempt 1 of 3, before any write", "does not support rollback; restore
+  manually" each answer the question a human actually asks.
+
+### Trade-offs accepted
+
+- **No HTTP route, no worker.** Nothing calls `execute_proposal` except
+  tests; the capability matrix has no `execute` capability yet, and choosing
+  who may press the button is a decision, not a default.
+- **One operation.** Proposals change one field on an existing product, so
+  only `update_product` is reachable; `create_product`/`delete_product`
+  exist on the seam and cannot be reached from an approval.
+- **The job does not record its target id.** Reproducible from the proposal
+  plus the listing; a denormalised column could drift from the one the
+  dispatch actually used.
+- **Records exist only where something called them.** No recorder, no
+  `tool_calls` row; no caller, no `agent_runs` row. The seam is proven, the
+  production callers are not built.
+
+### Alternatives rejected
+
+- **Returning the connector's response instead of re-reading.** Cheaper by
+  one round trip, and it cannot detect a marketplace that normalised,
+  truncated or rejected the value asynchronously — the exact case the
+  verification stage exists for.
+- **A job row for every refusal.** Pollutes the queue the batch drain will
+  read, and records an attempt count of zero with an error that is really an
+  API-level rejection.
+- **Retrying verification mismatches until they pass.** A marketplace that
+  uppercases titles never converges; the bounded budget plus rollback is what
+  makes the loop terminate honestly.
+- **Storing the previous state only when rollback is supported.** Then a
+  no-rollback marketplace could never be restored manually either, and §51's
+  "the plan exists before the write" would be a phrase rather than a row.
