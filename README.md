@@ -9,9 +9,10 @@ simulates. Humans approve. Connectors execute. Logs remember.
 
 ## Current status
 
-**Phases 8–18: authentication, catalog domain, conflicts, risk, ingestion, the
+**Phases 8–19: authentication, catalog domain, conflicts, risk, ingestion, the
 canonical model, reconciliation, the compliance corpus, LangGraph orchestration,
-AI tools, sandbox simulation and the approval workflow.** Sign-in, tenant isolation, the catalog domain
+AI tools, sandbox simulation, the approval workflow and the marketplace
+seam.** Sign-in, tenant isolation, the catalog domain
 (normalization, identity, relationships, source authority), conflict detection,
 deterministic risk scoring, catalog ingestion (validation, CSV/JSON/Excel parsing,
 schema detection and raw storage), canonicalization (raw records → `products`,
@@ -25,7 +26,10 @@ predicts a proposal's impact on a copy of the catalog before it is approved
 (§18, §19), and the approval center that decides those proposals — approve,
 reject, modify, request re-analysis, in bulk or one at a time, with every
 decision written to an immutable audit row (§20, §38, §39) — are complete and
-tested — **900 tests**, of which three are opt-in live-provider tests.
+tested — **932 tests**, of which three are opt-in live-provider tests.
+The marketplace seam that Phase 20 will execute through exists too: one
+interface, one mock adapter, credentials encrypted at rest (§22, §33, D-005),
+with every live integration still deferred.
 
 A live LLM provider **has** now been called three times: two schema-validated
 answers, fast and reasoning tier, plus a real tool call that resolved source
@@ -59,6 +63,7 @@ Every phase's delivery, gates and gaps are recorded in
 | Re-run supersede (no duplicate approval queue) | Implemented, unit tested |
 | Approval center: queue, four decisions, bulk low-risk, CRITICAL needs two approvers | Implemented, 33 tests |
 | Audit row per decision, `payload_hash` recomputable from the row (D-013) | Implemented, unit tested |
+| Marketplace seam: `MarketplaceConnector`, mock adapter, encrypted credentials (§22, §33, D-005) | Implemented, 32 tests; **no live adapter** — Shopify/Amazon/TikTok deferred |
 | Compliance corpus: section-aware chunking, content-hash dedup (D-021) | Implemented, 52 tests |
 | Hybrid retrieval: GIN keyword `ts_rank` + pgvector cosine, deterministic rerank | Implemented, unit tested |
 | Compliance API: ingest / list / search with per-hit citations and a signal note | Implemented, 12 tests |
@@ -152,7 +157,7 @@ Swagger UI at `http://localhost:3000/docs` when the frontend proxies, or
 ### Tests and lint
 
 ```bash
-python -m pytest -q                   # 897 passed, 3 skipped, no database required
+python -m pytest -q                   # 929 passed, 3 skipped, no database required
 CATALOGGUARD_LIVE_LLM=1 python -m pytest tests/agent -q   # opt-in: 3 live LLM calls (2 schemas + 1 tool call)
 python -m ruff check app tests alembic scripts
 python -m mypy app

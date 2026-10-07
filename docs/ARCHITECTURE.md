@@ -387,6 +387,40 @@ concurrency means bulk runs queue rather than fail.
 
 ---
 
+## Marketplace seam (D-005, Phase 19)
+
+§22's interface exists so the core never learns what a marketplace is called:
+
+```
+app/connectors/
+   base.py         MarketplaceConnector: §22's nine operations + rollback,
+                   data types, and the ConnectorError vocabulary
+   mock.py         MockConnector — in-memory, credential-checked, no clock
+   credentials.py  encrypt_credentials / decrypt_credentials (Fernet)
+   registry.py     CONNECTOR_FACTORIES = {"mock": ...}, connector_for()
+```
+
+- **One registry, one entry.** A caller asks for `mock` by the slug stored on
+  `marketplace_connections.marketplace`. An unknown name raises rather than
+  falling back to the mock, because a fallback would report writes against a
+  store that does not exist. No module in the package is named after a
+  deferred marketplace; a test asserts it.
+- **`retryable` lives on the error, not in the caller.** Rate limits and
+  transients say they may repeat; auth, not-found and unsupported say they
+  may not. §21's bounded-retry loop reads the class.
+- **Rollback is a capability as well as a method.** `supports_rollback=False`
+  must raise, which is how §21's "do not pretend rollback is possible" is
+  enforceable rather than aspirational.
+- **Credentials have one door.** `create_connection` encrypts and inserts;
+  `connector_for_connection` decrypts and dispatches. `marketplace_connections`
+  has no plaintext credential column, and the test that matters reads the
+  table's columns.
+- **Nothing in production calls it yet.** Phase 20's execution engine is the
+  first caller, so the seam is proven and unused — which is the state D-005
+  asked for.
+
+---
+
 ## Observability and data residency (D-010)
 
 Catalogs contain proprietary manufacturer files, wholesale margins, and
@@ -421,6 +455,13 @@ marketplace listings. Telemetry must not leave our infrastructure.
   diff also compares against the catalog's current value rather than the
   baseline the proposal was written against, so a stale proposal is not
   rejected for being stale.
+- **The marketplace seam has no traffic and no live adapter.** Every
+  operation, refusal and credential path is exercised by tests against
+  `MockConnector`, and nothing in production dispatches to it: no route
+  creates a `MarketplaceConnection` and no job calls a connector. Real rate
+  limits, auth expiry, pagination and partial failures are unvalidated, which
+  is the gap D-005 accepted and Phase 19 restated in the terms of what was
+  actually built.
 - **The approval center needs a person to be watching.** The queue is
   pull-based: whoever with `approve` capability looks decides, nothing
   notifies anyone, and no approver can be assigned to a proposal beyond

@@ -2,13 +2,13 @@
 
 One document per phase in the §64 development process, plus an index here.
 
-**How these documents were written.** Phases 0–18 are complete; each page
+**How these documents were written.** Phases 0–19 are complete; each page
 records what that phase actually delivered, where the code lives, how it was
 verified, and what remains unverified. The pages for phases 0–13 were written
 retroactively on 2026-10-06 from the artifacts that survive — `DECISIONS.md`,
 the commits, the test suite and `docs/ARCHITECTURE.md` — because no
 contemporaneous phase log was kept; nothing on those pages is claimed beyond
-what those artifacts show. Phases 14 to 18 were written as they were built. The remaining pages carry the §64 scope, the master-prompt
+what those artifacts show. Phases 14 to 19 were written as they were built. The remaining pages carry the §64 scope, the master-prompt
 sections that will drive them, and a status row above that says how far any of
 it has actually got — no page claims delivery it did not verify.
 
@@ -39,7 +39,7 @@ one to trust. D-018 onward already use §64 numbers.
 | [16](phase-16-risk-engine.md) | Risk engine | Complete | D-016 |
 | [17](phase-17-sandbox-simulation.md) | Sandbox simulation | Complete | — |
 | [18](phase-18-approval-workflow.md) | Approval workflow | Complete | D-020 amended |
-| [19](phase-19-marketplace-connectors.md) | Marketplace connectors | Deferred (D-005) | — |
+| [19](phase-19-marketplace-connectors.md) | Marketplace connectors | Complete (seam only) | D-005 amended |
 | [20](phase-20-execution-engine.md) | Execution engine | Not started | — |
 | [21](phase-21-frontend.md) | Frontend | Partially built | D-001 |
 | [22](phase-22-ai-copilot.md) | AI Copilot | Not started | — |
@@ -53,10 +53,10 @@ one to trust. D-018 onward already use §64 numbers.
 
 ## Phases to commits
 
-The suite is **900 tests**: 854 in `backend/tests/unit` and 46 in
+The suite is **932 tests**: 886 in `backend/tests/unit` and 46 in
 `backend/tests/agent` — 43 offline and 3 live-provider tests that run only when
 `CATALOGGUARD_LIVE_LLM=1` is set. `integration` and `e2e` exist as directories
-and are empty. A default run reports **897 passed, 3 skipped**.
+and are empty. A default run reports **929 passed, 3 skipped**.
 
 | Phase | Commit |
 |---|---|
@@ -78,6 +78,7 @@ and are empty. A default run reports **897 passed, 3 skipped**.
 | 16 — §16 conformance audit, inventory impact, stored risk evidence | `ec65470` |
 | 17 — sandbox simulation, §19 diff, simulate route | `f6b96d0` |
 | 18 — approval workflow, §38/§39 audit rows | `e11d29b` |
+| 19 — connector seam, mock adapter, encrypted credentials | `863b185` |
 
 ## Work that §64 has no phase of its own for
 
