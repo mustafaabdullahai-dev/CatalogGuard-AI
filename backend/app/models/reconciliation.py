@@ -30,10 +30,8 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import (
-    Base,
+    ImmutableTenantEntity,
     SoftDeletableTenantEntity,
-    TenantScopedMixin,
-    UUIDPrimaryKeyMixin,
     str_enum,
 )
 
@@ -433,16 +431,16 @@ class ExecutionJob(SoftDeletableTenantEntity):
     )
 
 
-class AuditLog(UUIDPrimaryKeyMixin, TenantScopedMixin, Base):
+class AuditLog(ImmutableTenantEntity):
     """Immutable audit trail (Section 39, D-013).
 
     Append-only by construction.
 
-    The mixin list is deliberately `UUIDPrimaryKeyMixin, TenantScopedMixin,
-    Base` — **not** `TenantEntity`. Inheriting `TenantEntity` would bring
-    `TimestampMixin.updated_at` along, and the presence of that column is what
-    makes a table look mutable to a future reader. Omitting it here means no
-    ORM code path can treat this table as updatable.
+    The base is `ImmutableTenantEntity`, whose whole reason for existing is this
+    shape: no `updated_at` and no `deleted_at`, so no ORM code path can treat
+    the table as updatable. `TenantEntity` would have brought `updated_at`
+    along, and the presence of that column is what makes a table look mutable to
+    a future reader.
 
     A database trigger enforces the same rule independently (see migration
     0001), so immutability does not depend on the ORM at all.
@@ -475,11 +473,9 @@ class AuditLog(UUIDPrimaryKeyMixin, TenantScopedMixin, Base):
 
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    # Frozen at insert. Hash chain makes silent tampering detectable.
+    # Frozen at insert. Recomputable from the row's own fields, so an edit is
+    # detectable by hashing it again (see `app/services/audit.py`).
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
 
     __table_args__ = (
         # Named separately from the `TenantScopedMixin` default

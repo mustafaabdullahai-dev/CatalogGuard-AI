@@ -9,6 +9,9 @@ from __future__ import annotations
 from app.db.repository import TenantRepository
 from app.models.catalog import MarketplaceProduct
 from app.models.reconciliation import (
+    ApprovalAction,
+    ApprovalRequest,
+    AuditLog,
     ChangeProposal,
     Conflict,
     ReconciliationRun,
@@ -39,3 +42,15 @@ class RiskAssessmentRepository(TenantRepository[RiskAssessment]):
 
 class SimulationRunRepository(TenantRepository[SimulationRun]):
     model = SimulationRun
+
+
+class ApprovalRequestRepository(TenantRepository[ApprovalRequest]):
+    model = ApprovalRequest
+
+
+class ApprovalActionRepository(TenantRepository[ApprovalAction]):
+    model = ApprovalAction
+
+
+class AuditLogRepository(TenantRepository[AuditLog]):
+    model = AuditLog

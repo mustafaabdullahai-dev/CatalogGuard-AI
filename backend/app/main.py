@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.v1 import (
+    approvals,
     auth,
     brand,
     catalog,
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
     app.include_router(catalog.router, prefix=settings.api_prefix)
     app.include_router(reconciliation.router, prefix=settings.api_prefix)
     app.include_router(compliance.router, prefix=settings.api_prefix)
+    app.include_router(approvals.router, prefix=settings.api_prefix)
 
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon() -> FileResponse:

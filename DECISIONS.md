@@ -1137,6 +1137,31 @@ or a `ReconciliationRun`, so the product's central claim was unimplemented.
 - **Per-product queries for run inputs.** N round trips on the path most likely to
   hold hundreds of products; §57 forbids exactly this.
 
+### Amendment (Phase 18, 2026-10-07)
+
+The two things this decision deferred are settled, and the rejected alternative
+above stands.
+
+- **The approver count comes from §38's ladder.** LOW, MEDIUM and HIGH each
+  need one approval; CRITICAL needs two. §38's "explicit approval" for HIGH is
+  a requirement that a human say yes — not a second human — while CRITICAL's
+  "multi-step approval" is the multi-person case, which is what
+  `approval_requests`' comment has always said about CRITICAL. The mapping is
+  `REQUIRED_APPROVALS` in `backend/app/services/approval/workflow.py`, and a
+  test asserts no level ever maps to zero.
+- **Approval requests are written.** A proposal's first decision opens one with
+  `required_approvals` set from its risk level. A second approval must come
+  from a second actor — one account cannot supply both votes. Rejection is
+  final at any count. A modification or a re-analysis closes the request, and
+  the next decision opens a fresh counter, because approvals given to the old
+  value say nothing about the new one.
+- **Auto-approval was not adopted.** "Approve all low-risk" is a bulk *human*
+  action, so §38's LOW band is cheaper to clear without becoming automatic.
+- **Every decision writes an `AuditLog`** — D-013's table, first written in
+  this phase — carrying the actor, the reason, the evidence, old and new
+  value, the risk, and the approval it belongs to, plus a `payload_hash`
+  recomputable from the row's own fields.
+
 ---
 
 ## D-021 — Compliance RAG: Two Deterministic Passes, Cited as Evidence
