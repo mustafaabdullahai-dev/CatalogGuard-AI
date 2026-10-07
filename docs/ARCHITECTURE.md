@@ -323,14 +323,25 @@ intake row
    ├─► relationships      orphans, cycles, variant axes, duplicate variants,
    │                      unapproved edges. Findings only — no write path.
    │
-   └─► risk               fixed weights, four bands, floors for identity,
-                          deletion, relationship and compliance consequences
+   ├─► risk               fixed weights, four bands, floors for identity,
+   │                      deletion, relationship and compliance consequences
+   │
+   └─► simulation         §18 chain on a *copy*: relationships → schema →
+                          compliance → SEO → conflicts, then the §19 diff,
+                          the impact report and an explanation. Writes a
+                          simulation run and the proposal's verdict; never the
+                          product.
 ```
 
 The ordering matters and is enforced by types: identity returns a match, not a
 product row; conflict detection returns a `DetectedConflict`, not a
 `ChangeProposal`; the risk engine takes a `RiskContext` value, not an ORM
 object. Each stage can be tested, explained, and replaced on its own.
+
+The simulation takes a value snapshot rather than a session, so what it
+predicts is a property of the inputs: same change, same report. A stage that
+could not run reports `skipped`, which is not `passed` — a missing compliance
+corpus must never read as an approval.
 
 Where a value can be wrong in an unrecoverable way, the answer is a proposal.
 Where it is merely inconvenient, the answer is a finding. The distinction is the
@@ -391,6 +402,14 @@ marketplace listings. Telemetry must not leave our infrastructure.
 - **No embedding-based identity matching yet.** Scoring is token overlap plus
   character ratio: explainable and reproducible, but blind to a paraphrase with
   no shared vocabulary. pgvector is in the schema for the ambiguous band.
+- **The sandbox's compliance stage is skipped, and its route has no database
+  behind it.** No `ComplianceCheck` implementation exists, so §18's compliance
+  step reports that the corpus is unreachable and cannot fail a proposal; and
+  `_snapshot_for()`'s queries and the row insert have only ever run against a
+  fake session, because D-006 still records the database as unconfirmed. The
+  diff also compares against the catalog's current value rather than the
+  baseline the proposal was written against, so a stale proposal is not
+  rejected for being stale.
 - **Risk weights are opinionated and not cross-interacting.** Weights encode a
   view about which changes are costly (D-016). Interaction terms would compound
   scores in ways a reviewer cannot check. §16's thirteen factors were audited

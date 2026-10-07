@@ -2,14 +2,13 @@
 
 One document per phase in the §64 development process, plus an index here.
 
-**How these documents were written.** Phases 0–16 are complete; each page
+**How these documents were written.** Phases 0–17 are complete; each page
 records what that phase actually delivered, where the code lives, how it was
 verified, and what remains unverified. The pages for phases 0–13 were written
 retroactively on 2026-10-06 from the artifacts that survive — `DECISIONS.md`,
 the commits, the test suite and `docs/ARCHITECTURE.md` — because no
 contemporaneous phase log was kept; nothing on those pages is claimed beyond
-what those artifacts show. Phases 14 to 16 were written as they were built, in
-the same day. The remaining pages carry the §64 scope, the master-prompt
+what those artifacts show. Phases 14 to 17 were written as they were built. The remaining pages carry the §64 scope, the master-prompt
 sections that will drive them, and a status row above that says how far any of
 it has actually got — no page claims delivery it did not verify.
 
@@ -38,7 +37,7 @@ one to trust. D-018 onward already use §64 numbers.
 | [14](phase-14-langgraph-orchestration.md) | LangGraph orchestration | Complete | D-004, D-007 |
 | [15](phase-15-ai-tools.md) | AI tools | Complete | D-003, D-004, D-007 |
 | [16](phase-16-risk-engine.md) | Risk engine | Complete | D-016 |
-| [17](phase-17-sandbox-simulation.md) | Sandbox simulation | Not started | — |
+| [17](phase-17-sandbox-simulation.md) | Sandbox simulation | Complete | — |
 | [18](phase-18-approval-workflow.md) | Approval workflow | Not started | — |
 | [19](phase-19-marketplace-connectors.md) | Marketplace connectors | Deferred (D-005) | — |
 | [20](phase-20-execution-engine.md) | Execution engine | Not started | — |
@@ -54,10 +53,10 @@ one to trust. D-018 onward already use §64 numbers.
 
 ## Phases to commits
 
-The suite is **836 tests**: 790 in `backend/tests/unit` and 46 in
+The suite is **867 tests**: 821 in `backend/tests/unit` and 46 in
 `backend/tests/agent` — 43 offline and 3 live-provider tests that run only when
 `CATALOGGUARD_LIVE_LLM=1` is set. `integration` and `e2e` exist as directories
-and are empty. A default run reports **833 passed, 3 skipped**.
+and are empty. A default run reports **864 passed, 3 skipped**.
 
 | Phase | Commit |
 |---|---|
@@ -77,6 +76,7 @@ and are empty. A default run reports **833 passed, 3 skipped**.
 | 14 — LangGraph orchestration, D-007 validation layer | `6268cc0` |
 | 15 — read-only tools, tool-call loop, §34 containment | `1cc3931` |
 | 16 — §16 conformance audit, inventory impact, stored risk evidence | `ec65470` |
+| 17 — sandbox simulation, §19 diff, simulate route | `f6b96d0` |
 
 ## Work that §64 has no phase of its own for
 
@@ -89,10 +89,9 @@ in `DECISIONS.md` under their own numbers:
   run without it. Implemented in `21eee9e`.
 - **Conflict detection and risk (D-011 through D-016 territory)** — conflict
   rows with evidence and impact, and the deterministic risk engine. Conflict
-  detection is §11; the risk engine is **§64 Phase 16**, which is why phase 16
-  is marked *partially built* above: the scoring logic exists and is written by
-  reconciliation, but the phase's own integration and verification work has not
-  happened. Implemented in `21eee9e`.
+  detection is §11; the risk engine is §64 Phase 16, whose own audit, inventory
+  factor and stored-evidence work landed in `ec65470`. Implemented in
+  `21eee9e`.
 
 ## Conventions in these pages
 
