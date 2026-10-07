@@ -46,17 +46,18 @@ instructions.
 
 ## Verification
 
-Structure claims are checked by the test suite importing across it (814 tests)
+Structure claims are checked by the test suite importing across it (the count
+lives in [`docs/phases/README.md`](README.md), which is updated per phase)
 and by `tests/unit/test_migration_parity.py`, which fails if the generated
 migration and `app/models` disagree.
 
 ## Gaps and honest limits
 
 - `backend/tests/integration` and `backend/tests/e2e` are **empty
-  directories** with `__init__.py` only; `backend/tests/agent` gained 12
-  offline tests and 2 opt-in live ones at Phase 14, then 30 more and a third
-  live one at Phase 15. 769 of the 814 tests are unit tests, and no test needs
-  a database or a queue.
+  directories** with `__init__.py` only. `backend/tests/agent` began at Phase
+  14 (12 offline, 2 live) and has grown with each agent phase; it is the only
+  directory whose tests may touch a provider, and only behind an opt-in
+  marker. Everything else needs no database and no queue.
 - `docker/` is empty — Phase 28.
 - `app/agents/` began as a placeholder for Phase 14 and now holds the
   orchestration graph.

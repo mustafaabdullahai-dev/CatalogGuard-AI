@@ -21,7 +21,7 @@ marketplace policy, hybrid keyword + vector search, citable evidence), and the
 agent graph (intake → normalize → analyze → finalize, with D-007's schema
 validation and bounded repair on every model call), and four read-only agent
 tools the graph can call through a bounded tool loop (§23) are complete and
-tested — **814 tests**, of which three are opt-in live-provider tests.
+tested — **836 tests**, of which three are opt-in live-provider tests.
 
 A live LLM provider **has** now been called three times: two schema-validated
 answers, fast and reasoning tier, plus a real tool call that resolved source
@@ -44,7 +44,7 @@ Every phase's delivery, gates and gaps are recorded in
 | Parent-child validation: orphans, cycles, variant axes, bundles (D-015) | Implemented, unit tested |
 | Source authority with per-field overrides; ties escalate (D-015) | Implemented, unit tested |
 | Conflict detection with available values, evidence and impact (§11) | Implemented, unit tested |
-| Deterministic risk scoring with weights and floors (D-016) | Implemented, unit tested |
+| Deterministic risk scoring: 22 weights, four bands, five floors, §16 conformance audited (D-016) | Implemented, unit tested |
 | Catalog ingestion: validation, CSV/JSON/Excel parsing, schema detection, raw storage (D-018) | Implemented, 44 tests |
 | Ingestion sync/async seam (Dramatiq worker) | Implemented; **unverified** — no live Redis |
 | Canonical product model: raw records → products, identifiers, v1 versions (D-019) | Implemented, 12 tests |
@@ -146,7 +146,7 @@ Swagger UI at `http://localhost:3000/docs` when the frontend proxies, or
 ### Tests and lint
 
 ```bash
-python -m pytest -q                   # 811 passed, 3 skipped, no database required
+python -m pytest -q                   # 833 passed, 3 skipped, no database required
 CATALOGGUARD_LIVE_LLM=1 python -m pytest tests/agent -q   # opt-in: 3 live LLM calls (2 schemas + 1 tool call)
 python -m ruff check app tests alembic scripts
 python -m mypy app

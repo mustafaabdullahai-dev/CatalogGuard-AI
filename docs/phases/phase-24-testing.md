@@ -1,6 +1,6 @@
 # Phase 24 — Testing
 
-**Status:** In progress — 814 tests (769 unit, 42 agent, 3 opt-in live); integration and e2e directories are empty
+**Status:** In progress — counts move every phase, so see the [phase log](README.md); integration and e2e directories are empty
 **§64 scope:** Testing
 
 > Retroactive stub written 2026-10-06. This page states scope, entry conditions

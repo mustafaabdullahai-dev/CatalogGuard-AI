@@ -393,7 +393,10 @@ marketplace listings. Telemetry must not leave our infrastructure.
   no shared vocabulary. pgvector is in the schema for the ambiguous band.
 - **Risk weights are opinionated and not cross-interacting.** Weights encode a
   view about which changes are costly (D-016). Interaction terms would compound
-  scores in ways a reviewer cannot check.
+  scores in ways a reviewer cannot check. §16's thirteen factors were audited
+  against the table in Phase 16: all are scored, two of them deliberately
+  through shared codes, and the seven weights D-016 added beyond §16 are listed
+  in `DECISIONS.md`.
 - **Password reset and invitations exist, but nothing is sent.** Both queue to
   `email_outbox` (D-017) because no mail provider is configured. The token
   lifecycle, single-use enforcement, throttling, and authorization are

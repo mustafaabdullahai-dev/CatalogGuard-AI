@@ -26,7 +26,7 @@ environment variables)
 ```bash
 cd backend
 source .venv/bin/activate
-python -m pytest              # 814 tests, no database required
+python -m pytest              # no database or queue required
 python -m ruff check app tests alembic scripts
 python -m mypy app
 ```
