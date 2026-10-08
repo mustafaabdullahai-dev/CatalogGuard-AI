@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any, Protocol, TypeVar, runtime_checkable
@@ -58,6 +59,7 @@ from app.agents.tools import (
 )
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
+from app.core.telemetry import emit
 
 logger = get_logger(__name__)
 
@@ -401,86 +403,107 @@ class ChatCompletionClient:
         max_tool_rounds = self._settings.llm_max_tool_rounds
 
         async with self._limiter:
-            for attempt in range(1, repairs_allowed + 2):  # first call + bounded repairs
-                attempts = attempt
-                reply_text: str | None = None
+            # §32's latency, model usage and failure signal for every LLM call,
+            # emitted once per call whatever the outcome — a call that burned
+            # tokens and then failed is exactly the one worth seeing. Attributes
+            # carry counts and ids only; the prompt is not telemetry.
+            llm_started = time.perf_counter()
+            outcome_status = "ok"
+            try:
+                for attempt in range(1, repairs_allowed + 2):  # first call + bounded repairs
+                    attempts = attempt
+                    reply_text: str | None = None
 
-                # One answer attempt plus `max_tool_rounds` chances to ask for
-                # tools. If the loop ends without an answer, the model spent
-                # every chance on tool calls and the run fails loudly.
-                for _round in range(max_tool_rounds + 2):
-                    response = await self._completer(
-                        model=model, messages=messages, tools=tool_schemas
-                    )
-                    model_calls += 1
-                    input_tokens += response.input_tokens
-                    output_tokens += response.output_tokens
+                    # One answer attempt plus `max_tool_rounds` chances to ask for
+                    # tools. If the loop ends without an answer, the model spent
+                    # every chance on tool calls and the run fails loudly.
+                    for _round in range(max_tool_rounds + 2):
+                        response = await self._completer(
+                            model=model, messages=messages, tools=tool_schemas
+                        )
+                        model_calls += 1
+                        input_tokens += response.input_tokens
+                        output_tokens += response.output_tokens
 
-                    if not response.tool_calls:
-                        reply_text = response.text
-                        break
-                    if tool_setup is None:
-                        messages.append(
-                            HumanMessage(
-                                content=(
-                                    "No tools are configured for this call. Answer from the "
-                                    "schema alone, or say what you cannot determine without one."
+                        if not response.tool_calls:
+                            reply_text = response.text
+                            break
+                        if tool_setup is None:
+                            messages.append(
+                                HumanMessage(
+                                    content=(
+                                        "No tools are configured for this call. Answer "
+                                        "from the schema alone, or say what you cannot "
+                                        "determine without one."
+                                    )
                                 )
                             )
-                        )
-                        continue
-                    if tool_rounds >= max_tool_rounds:
-                        # It asked once too often. `reply_text` stays empty, so
-                        # the run fails below rather than granting one more round.
-                        break
-                    tool_rounds += 1
-                    registry, context = tool_setup
-                    messages.append(response.as_message())
-                    for call in response.tool_calls:
-                        outcome = await registry.execute(
-                            call.name, call.arguments, context=context
-                        )
-                        messages.append(
-                            ToolMessage(
-                                content=wrap_tool_result(call.name, outcome.content),
-                                tool_call_id=call.id,
+                            continue
+                        if tool_rounds >= max_tool_rounds:
+                            # It asked once too often. `reply_text` stays empty, so
+                            # the run fails below rather than granting one more round.
+                            break
+                        tool_rounds += 1
+                        registry, context = tool_setup
+                        messages.append(response.as_message())
+                        for call in response.tool_calls:
+                            outcome = await registry.execute(
+                                call.name, call.arguments, context=context
                             )
+                            messages.append(
+                                ToolMessage(
+                                    content=wrap_tool_result(call.name, outcome.content),
+                                    tool_call_id=call.id,
+                                )
+                            )
+
+                    if reply_text is None:
+                        problems.append(
+                            f"the model asked for tools in {max_tool_rounds + 1} consecutive "
+                            "turns and never answered"
                         )
+                        break
 
-                if reply_text is None:
-                    problems.append(
-                        f"the model asked for tools in {max_tool_rounds + 1} consecutive "
-                        "turns and never answered"
+                    try:
+                        parsed = schema.model_validate_json(json_only(reply_text))
+                    except ValidationError as exc:
+                        problems.append(validation_summary(exc))
+                        messages = [
+                            *messages,
+                            HumanMessage(content=repair_prompt(exc)),
+                        ]
+                        continue
+
+                    logger.info(
+                        "llm_structured_output_ok",
+                        tier=tier.value,
+                        model=model,
+                        schema=schema.__name__,
+                        attempts=attempt,
+                        repairs=attempt - 1,
+                        tool_rounds=tool_rounds,
+                        usage=_usage_line(input_tokens, output_tokens),
                     )
-                    break
+                    return parsed, Usage(
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        calls=model_calls,
+                        repairs=max(0, attempt - 1),
+                    )
 
-                try:
-                    parsed = schema.model_validate_json(json_only(reply_text))
-                except ValidationError as exc:
-                    problems.append(validation_summary(exc))
-                    messages = [
-                        *messages,
-                        HumanMessage(content=repair_prompt(exc)),
-                    ]
-                    continue
-
-                logger.info(
-                    "llm_structured_output_ok",
-                    tier=tier.value,
-                    model=model,
-                    schema=schema.__name__,
-                    attempts=attempt,
-                    repairs=attempt - 1,
-                    tool_rounds=tool_rounds,
-                    usage=_usage_line(input_tokens, output_tokens),
+            finally:
+                emit(
+                    "llm_call",
+                    model,
+                    duration_ms=int((time.perf_counter() - llm_started) * 1000),
+                    status=outcome_status,
+                    attributes={
+                        "tier": tier.value,
+                        "model": model,
+                        "schema": schema.__name__,
+                    },
                 )
-                return parsed, Usage(
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    calls=model_calls,
-                    repairs=max(0, attempt - 1),
-                )
-
+        outcome_status = "failed"
         error = StructuredOutputError(
             schema_name=schema.__name__,
             attempts=attempts,

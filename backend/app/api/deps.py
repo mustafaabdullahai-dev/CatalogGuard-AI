@@ -28,6 +28,7 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.logging import bind_context
 from app.db.base import TenantContext
 from app.db.session import bind_tenant, get_session
 from app.models.tenancy import AuthSession, RoleCapabilities, User, WorkspaceMembership
@@ -161,6 +162,10 @@ async def get_current_tenant(
         raise _FORBIDDEN
 
     await bind_tenant(db, membership.workspace_id)
+    # §55: workspace and user reach every log line for the rest of the request.
+    # Bound here because this is the first point either is known; an
+    # unauthenticated request simply never binds them.
+    bind_context(workspace_id=str(membership.workspace_id), user_id=str(context.user.id))
     return TenantScope(
         context=context,
         tenant=TenantContext(

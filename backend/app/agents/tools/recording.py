@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.tools.spec import ToolCallOutcome
 from app.core.logging import get_logger
 from app.core.masking import mask_text, mask_value
+from app.core.telemetry import emit
 from app.db.base import TenantContext, utcnow
 from app.db.repository import TenantRepository
 from app.models.platform import AgentRun, ToolCall
@@ -70,6 +71,19 @@ class DatabaseToolRecorder:
         self, *, name: str, arguments: Mapping[str, Any], outcome: ToolCallOutcome
     ) -> None:
         try:
+            emit(
+                "tool_call",
+                name,
+                status="ok" if outcome.ok else f"failed:{outcome.error_code}",
+                workspace_id=str(self._tenant.workspace_id),
+                run_id=str(self._agent_run_id),
+                attributes={
+                    "tool": name,
+                    "ok": outcome.ok,
+                    "duration_ms": outcome.duration_ms,
+                    "error_code": outcome.error_code,
+                },
+            )
             row = ToolCall(
                 agent_run_id=self._agent_run_id,
                 tool_name=name,
@@ -111,6 +125,14 @@ async def start_agent_run(
     nobody can place. This is why recording starts here rather than wherever a
     tool happens to be called.
     """
+    emit(
+        "agent_run",
+        f"started:{run_type}",
+        status="running",
+        workspace_id=str(tenant.workspace_id),
+        run_id=None,
+        attributes={"run_type": run_type, "graph": graph_name},
+    )
     run = AgentRun(
         run_type=run_type,
         graph_name=graph_name,
@@ -157,6 +179,21 @@ async def finish_agent_run(
         )
     else:
         run.duration_ms = duration_ms
+    emit(
+        "agent_run",
+        f"finished:{status}",
+        duration_ms=run.duration_ms,
+        status=status,
+        workspace_id=str(run.workspace_id),
+        run_id=str(run.id),
+        attributes={
+            "run_type": run.run_type,
+            "graph": run.graph_name,
+            "llm_calls": run.llm_calls,
+            "llm_tokens_used": run.llm_tokens_used,
+            "error": run.error_message is not None,
+        },
+    )
     await db.flush()
     return run
 

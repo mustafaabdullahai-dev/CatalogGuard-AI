@@ -170,6 +170,9 @@ class Settings(BaseSettings):
     langfuse_host: str = ""
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
+    # An observability backend that stalls a product change is worse than no
+    # backend, so the emit path is bounded and its failures are swallowed.
+    telemetry_timeout_seconds: float = 2.0
 
     # Uploads
     upload_dir: str = "./uploads"

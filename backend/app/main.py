@@ -18,11 +18,16 @@ from app.api.v1 import (
     copilot,
     ingestion,
     invitations,
+    observability,
     reconciliation,
 )
 from app.core.config import get_settings
 from app.core.logging import configure_logging
-from app.core.middleware import CSRFMiddleware, SecurityHeadersMiddleware
+from app.core.middleware import (
+    CSRFMiddleware,
+    RequestContextMiddleware,
+    SecurityHeadersMiddleware,
+)
 from app.db.session import check_connection
 
 DESCRIPTION = """
@@ -56,6 +61,9 @@ def create_app() -> FastAPI:
     # Added last, so they run first. CSRF has to see the request before routing
     # decides anything, and the headers have to be on the way out whatever the
     # outcome.
+    # Added first, so it wraps the rest: the request id and timing must be
+    # bound for every response, including the ones CSRF refuses.
+    app.add_middleware(RequestContextMiddleware)
     app.add_middleware(SecurityHeadersMiddleware, settings=settings)
     app.add_middleware(CSRFMiddleware, settings=settings)
 
@@ -72,6 +80,7 @@ def create_app() -> FastAPI:
     app.include_router(compliance.router, prefix=settings.api_prefix)
     app.include_router(approvals.router, prefix=settings.api_prefix)
     app.include_router(copilot.router, prefix=settings.api_prefix)
+    app.include_router(observability.router, prefix=settings.api_prefix)
 
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon() -> FileResponse:

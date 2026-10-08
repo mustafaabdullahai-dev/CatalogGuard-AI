@@ -17,14 +17,106 @@ from __future__ import annotations
 
 import hmac
 import secrets
+import time
 from hashlib import sha256
+from uuid import uuid4
 
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from structlog.contextvars import bind_contextvars, clear_contextvars
 
 from app.core.config import Settings
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+
+REQUEST_ID_HEADER = "X-Request-Id"
+# Bound to every request: what §55 asks to be in a structured log, minus the
+# identity fields, which only the tenant dependency can resolve.
+REQUEST_LOG_FIELDS = ("request_id", "method", "path", "status", "duration_ms")
+
+
+class RequestContextMiddleware:
+    """Bind §55's request-scoped fields for the life of one request.
+
+    `bind_context` existed since Phase 8 and nothing called it, so no log line
+    carried a request id and none of them could be correlated with each other —
+    the masking processor had nothing to correlate. This is the middleware that
+    makes `request_id`, `method`, `path`, `status` and `duration_ms` automatic,
+    and the tenant dependency adds `workspace_id` and `user_id` once it has
+    resolved them.
+
+    An inbound `X-Request-Id` is honoured so a caller (or an upstream proxy) can
+    stitch its own trace to ours; anything that is not a short opaque token is
+    replaced rather than echoed, because a log line is not a place to accept a
+    caller's string unexamined.
+    """
+
+    def __init__(self, app: ASGIApp, max_length: int = 64) -> None:
+        self.app = app
+        self.max_length = max_length
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = Headers(scope=scope)
+        inbound = headers.get(REQUEST_ID_HEADER, "")
+        request_id = _safe_request_id(inbound) or uuid4().hex
+        path = scope.get("path", "")
+        method = scope.get("method", "")
+
+        clear_contextvars()
+        bind_contextvars(
+            request_id=request_id,
+            method=method,
+            path=path,
+        )
+        started = time.perf_counter()
+        status_holder = {"status": 500}
+
+        async def send_with_request_id(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                status_holder["status"] = int(message["status"])
+                raw_headers = MutableHeaders(scope=message)
+                raw_headers[REQUEST_ID_HEADER] = request_id
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_with_request_id)
+        finally:
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            # Bound before the log call: binding merges, so without this
+            # the last request's status and duration would leak into the next.
+            bind_contextvars(status=status_holder["status"], duration_ms=duration_ms)
+            logger.info(
+                "request_completed",
+                status=status_holder["status"],
+                duration_ms=duration_ms,
+                workspace_id=_bound_workspace(),
+            )
+            clear_contextvars()
+
+
+def _safe_request_id(value: str) -> str | None:
+    """Accept an opaque token or nothing."""
+    candidate = value.strip()
+    if not candidate or len(candidate) > 64:
+        return None
+    if not all(character.isalnum() or character in "-_" for character in candidate):
+        return None
+    return candidate
+
+
+def _bound_workspace() -> str | None:
+    from structlog.contextvars import get_contextvars
+
+    bound = get_contextvars()
+    value = bound.get("workspace_id")
+    return None if value is None else str(value)
 
 # Paths that legitimately have no cookie yet. A client that calls one of these
 # first can log in without a preflight round trip.

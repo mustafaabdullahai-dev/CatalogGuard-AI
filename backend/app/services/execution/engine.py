@@ -43,6 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.connectors.base import ConnectorError, MarketplaceConnector
 from app.core.logging import get_logger
+from app.core.telemetry import emit
 from app.db.base import TenantContext, utcnow
 from app.models.catalog import MarketplaceProduct
 from app.models.platform import MarketplaceConnection
@@ -358,7 +359,28 @@ async def _audit(
 
     Written for every outcome, including a pre-execution refusal: "we checked
     and did not act" is exactly the kind of thing that is denied later.
+
+    The same moment emits §32's execution telemetry, so every outcome a row
+    records also appears as an observation — including the ones nobody would
+    think to look for, which is the point of watching executions at all.
     """
+    emit(
+        "execution",
+        f"{job.operation}.{job.status.value}",
+        status=str(job.status.value),
+        workspace_id=str(tenant.workspace_id),
+        run_id=str(job.id),
+        attributes={
+            "connector": job.connector,
+            "operation": job.operation,
+            "attempts": job.attempt_count,
+            "max_attempts": job.max_attempts,
+            "rollback_supported": job.rollback_supported,
+            "rolled_back": job.status.value == "ROLLED_BACK",
+            "recovered": job.recovery_instructions is not None,
+            "channels": 0 if previous is None else 1,
+        },
+    )
     audit = audit_log_for(
         workspace_id=tenant.workspace_id,
         actor_id=actor_id,

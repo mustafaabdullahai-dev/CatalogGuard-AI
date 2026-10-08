@@ -21,6 +21,7 @@ has never executed (no key, and pgvector is unconfirmed on D-006).
 
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -35,6 +36,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.telemetry import emit
 from app.db.base import TenantContext
 from app.models.platform import ComplianceChunk, ComplianceDocument
 from app.rag.chunking import chunk_text
@@ -495,6 +497,7 @@ async def search(
 
     provider = embedder if embedder is not None else get_embedder()
 
+    retrieval_started = time.perf_counter()
     merged: dict[UUID, Candidate] = {}
     for candidate, rank in await _keyword_pass(
         session, tenant, query=query,
@@ -525,6 +528,7 @@ async def search(
                 )
 
     hits = rerank(query, list(merged.values()), top_k=top_k)
+    signals = signals_used(embedder_available=vectors is not None)
     logger.info(
         "compliance_search",
         candidates=len(merged),
@@ -532,9 +536,28 @@ async def search(
         provider=provider.name,
         filter_active=not metadata_filter.is_empty,
     )
+    # §32's "retrieval quality". Counts, provider and signals — never the query:
+    # a compliance question is written from catalog content, and D-010 keeps that
+    # content out of telemetry. An empty result set is worth seeing as much as a
+    # full one, so it is emitted with the same shape and `returned=0`.
+    emit(
+        "retrieval",
+        "compliance_search",
+        duration_ms=int((time.perf_counter() - retrieval_started) * 1000),
+        status="ok" if hits else "empty",
+        workspace_id=str(tenant.workspace_id),
+        attributes={
+            "candidates": len(merged),
+            "returned": len(hits),
+            "top_k": top_k,
+            "provider": provider.name,
+            "signals": list(signals),
+            "filter_active": not metadata_filter.is_empty,
+        },
+    )
     return SearchResult(
         hits=hits,
-        signals=signals_used(embedder_available=vectors is not None),
+        signals=signals,
         candidates_considered=len(merged),
         query=query,
     )
