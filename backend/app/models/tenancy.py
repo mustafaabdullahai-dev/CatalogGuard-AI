@@ -61,16 +61,19 @@ class RoleCapabilities:
 
     _ROLE_CAPABILITIES: dict[UserRole, frozenset[str]] = {
         UserRole.ECOMMERCE_OPS_MANAGER: frozenset(
-            {"read", "write", "approve", "configure_policy", "admin"}
+            {"read", "write", "approve", "configure_policy", "use_copilot", "admin"}
         ),
         UserRole.DATA_STEWARD: frozenset(
-            {"read", "write", "approve", "resolve_conflicts"}
+            {"read", "write", "approve", "resolve_conflicts", "use_copilot"}
         ),
         # Explicitly cannot approve: holds credential custody, so approval
         # rights here would mean one compromised account can change listings.
         UserRole.DATA_INTEGRATION_ADMIN: frozenset(
             {"read", "configure_sources", "manage_connectors"}
         ),
+        # No `use_copilot`: a merchandiser holds scoped write on two attribute
+        # groups, and the copilot answers questions across the whole catalog.
+        # D-024 keeps it with the roles that review changes.
         UserRole.MERCHANDISER: frozenset(
             {"read", "write:financial", "write:inventory"}
         ),

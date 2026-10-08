@@ -81,6 +81,18 @@ class Settings(BaseSettings):
     # revoked, which matters when approval authority is the thing being
     # protected. The JWT settings above remain for future machine-to-machine
     # tokens between the API and workers.
+    # Copilot (Phase 22, §31). The question cap is input validation (§33); the
+    # history cap keeps one request from carrying an entire conversation into a
+    # prompt; the rate limit is per process and documented as such (D-024).
+    copilot_max_question_chars: int = 2000
+    copilot_max_history_turns: int = 8
+    copilot_max_rows_per_tool: int = 20
+    # A graph node wants a small tool result; a copilot answer is mostly a
+    # summary of rows, so its budget is larger. Without this the registry refuses
+    # its own results as `output_too_large` on any real workspace.
+    copilot_max_tool_output_chars: int = 24_000
+    copilot_requests_per_minute: int = 10
+
     session_cookie_name: str = "cg_session"
     csrf_cookie_name: str = "cg_csrf"
     csrf_header_name: str = "X-CSRF-Token"

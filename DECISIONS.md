@@ -1506,3 +1506,104 @@ buttons deliberately disabled and filters that were decoration.
   catalog is clean when nothing was read at all.
 - **Optimistic bulk decisions.** D-020 keeps a person in the loop; showing a
   decided item before the server agrees would show a decision that was refused.
+
+---
+
+### Amendment (Phase 22, 2026-10-08)
+
+The "no AI Copilot" trade-off above is lifted, with the boundary D-024 draws: a
+read-only, cited, tool-backed copilot behind one capability, reachable as an API
+and with no console surface yet. The reasoning behind the deferral — that
+evidence-rich cards should carry the AI value — is kept: the copilot explains
+and retrieves those cards' evidence, and cannot change what they say.
+
+---
+
+## D-024 — Copilot: Read-Only, Cited Answers, One Capability
+
+**Status:** Implemented (Phase 22). Unverified against a live model — the Qroq key is still unrotated, so nothing here has called a provider.
+
+### Decision
+
+- **Five read-only tools over the tenant's own rows**, plus Phase 15's four pure
+  tools: `product_lookup`, `conflict_search`, `change_search`,
+  `compliance_search`, `sandbox_simulator`. No tool creates a proposal, approves
+  one, or writes a product. The simulator takes `write` rather than `read`
+  because it records a `SimulationRun` row.
+- **One capability, `use_copilot`,** held by the ops manager and the data steward.
+  Not the merchandiser, not the SEO specialist, and not the data-integration
+  admin: the copilot answers across the whole catalog, and the integration admin
+  holds credential custody (D-003, D-004).
+- **Citations are enforced, not requested.** A citation naming a tool that never
+  ran is dropped; an answer left making claims without one goes back for exactly
+  one repair with the complaint in the prompt; a second failure is a 502 rather
+  than a paragraph. `tools_used` in the answer is replaced with what the
+  registry actually executed — a model's account of its own tool use is an
+  intention, not a record.
+- **`insufficient_data` is a first-class answer.** "The tools cannot cover this,
+  and here is what is missing" is a successful response, not a failure.
+- **Records per turn, no privileges**: one `agent_runs` row, one `tool_calls`
+  row per call (Phase 20's recorder), one immutable `copilot.query` audit row
+  carrying the question and the tools that answered it.
+- **One POST, no act path.** The router exposes exactly one route and it cannot
+  change anything, so there is no second gate to keep in step with the first.
+- **Rate limiting is per process**, `copilot_requests_per_minute` per
+  (workspace, user), and documented as per process. A shared limit belongs on
+  Redis, whose credentials are still the originals awaiting rotation.
+
+### Context
+
+§31 asks for an optional copilot that "must use tools rather than hallucinating
+database information". Phases 14–15 built the graph, the tool loop and the
+validation layer; Phases 17–20 built the rows a copilot would need to ask about;
+Phase 21's console is where an operator would use it. D-005 had deferred this
+phase for MVP, on the grounds that evidence-rich cards carried the AI value
+instead. The deferral is lifted here with a boundary, the same way Phase 19 gave
+the marketplace deferral one.
+
+### Rationale
+
+- **Subordinate to the workflow, not beside it.** Every D-024 rule pushes toward
+  the deterministic surfaces: the copilot may retrieve, explain, score and
+  simulate, and a person still decides (D-020). A copilot that could approve
+  would make the approval center's audit trail a record of a model's mood.
+- **An uncited claim is the failure mode, so citations are checked
+  mechanically.** The prompt asks for them; the service verifies each against the
+  tools that ran. Relying on a model's compliance with an instruction is how a
+  workspace ends up quoting a SKU that does not exist.
+- **One route cannot be mis-gated.** Two copilot routes — ask and act — would
+  mean two capability checks, and the second one is the one someone would forget.
+- **A refusal is an answer.** The copilot that says "I cannot see that" is
+  usable; the one that guesses is not, and `insufficient_data` exists so the
+  difference is visible in the response body.
+
+### Trade-offs accepted
+
+- **No streaming.** The answer arrives whole, with its citations, so a partial
+  stream cannot be read before it is complete. §57 lists streaming as a
+  consideration, not a requirement; SSE is not built.
+- **No UI.** §31's copilot is reachable as an API only. Phase 21's console has
+  nowhere to put it yet, and a chat panel built without an accessible live
+  region, focus management and a streaming story would be worse than none.
+- **The model's account of itself is not trusted.** `tools_used` from the model
+  is discarded; only the registry's execution list is returned.
+- **Rate limiting does not survive multiple workers.** Documented in
+  `app/services/copilot/rate_limit.py` rather than presented as a control.
+- **One repair attempt.** Beyond that the service reports failure, because a
+  model that cannot cite after being told exactly why is not going to cite on a
+  third attempt — it is going to produce a longer paragraph.
+
+### Alternatives rejected
+
+- **Grant the copilot `read` for everyone.** A merchandiser's scoped write on two
+  attribute groups implies a scoped view of the catalog; the copilot has none.
+- **Let it create proposals.** That is D-020's territory and it needs a decision
+  of its own: a proposal created by a model is a proposal nobody read.
+- **Trust the prompt alone for citations.** Instructions are not enforcement, and
+  the cost of the failure is a plausible, confident, wrong answer about a
+  customer's catalog.
+- **Stream tokens immediately.** A stream invites reading a half-finished claim
+  as a finding, and the citations that make it checkable arrive last.
+- **A dashboard-wide chat that preloads rows.** Sending the catalog into a prompt
+  without a tool is §31's failure mode with extra steps: whatever the model
+  recalls about rows it never asked for.

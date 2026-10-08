@@ -278,7 +278,14 @@ def repair_prompt(exc: ValidationError) -> str:
 
 
 class StructuredLLM(Protocol):
-    """What the graph's nodes are written against: schema in, model out."""
+    """What the graph's nodes are written against: schema in, model out.
+
+    The two tool parameters are optional and were already load-bearing: Phase 14
+    passes them (and Phase 22's copilot depends on them) through the only
+    implementation, `ChatCompletionClient.complete`. They are declared here so
+    the contract says what callers may send instead of leaving them to a
+    `**kwargs` that type checking cannot see.
+    """
 
     async def complete(
         self,
@@ -287,6 +294,8 @@ class StructuredLLM(Protocol):
         schema: type[T],
         system: str,
         user: str,
+        tools: ToolRegistry | None = None,
+        tool_context: ToolContext | None = None,
     ) -> tuple[T, Usage]: ...
 
 

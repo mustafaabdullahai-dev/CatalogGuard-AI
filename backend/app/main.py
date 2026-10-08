@@ -15,6 +15,7 @@ from app.api.v1 import (
     brand,
     catalog,
     compliance,
+    copilot,
     ingestion,
     invitations,
     reconciliation,
@@ -70,6 +71,7 @@ def create_app() -> FastAPI:
     app.include_router(reconciliation.router, prefix=settings.api_prefix)
     app.include_router(compliance.router, prefix=settings.api_prefix)
     app.include_router(approvals.router, prefix=settings.api_prefix)
+    app.include_router(copilot.router, prefix=settings.api_prefix)
 
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon() -> FileResponse:

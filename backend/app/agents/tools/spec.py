@@ -231,6 +231,26 @@ class ToolRegistry:
             recorder=self._recorder,
         )
 
+    def with_recorder(self, recorder: ToolCallRecorder | None) -> ToolRegistry:
+        """The same tools, recording through `recorder`.
+
+        A caller that hands in a registry it built itself would otherwise carry
+        no recorder at all, and `execute` would silently record nothing — which
+        Phase 22's copilot found the hard way: its citation check reads the
+        record of what ran, and with no recorder every citation looked invented.
+        Returns a copy rather than mutating, as `subset` does.
+        """
+        return ToolRegistry(
+            list(self._specs.values()),
+            max_output_chars=self._max_output_chars,
+            recorder=recorder,
+        )
+
+    @property
+    def recorder(self) -> ToolCallRecorder | None:
+        """The recorder this registry writes through, or `None`."""
+        return self._recorder
+
     def __len__(self) -> int:
         return len(self._specs)
 

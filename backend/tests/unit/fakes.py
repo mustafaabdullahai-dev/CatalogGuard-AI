@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 from sqlalchemy.sql import operators
-from sqlalchemy.sql.elements import BinaryExpression, BooleanClauseList
+from sqlalchemy.sql.elements import BinaryExpression, BooleanClauseList, Grouping
 
 
 def matches(row: Any, clause: Any) -> bool:
@@ -30,6 +30,10 @@ def matches(row: Any, clause: Any) -> bool:
     """
     if clause is None:
         return True
+    if isinstance(clause, Grouping):
+        # `(a OR b) AND tenant...` parenthesises the OR; the grouping is SQL
+        # syntax, not a predicate.
+        return matches(row, clause.element)
     if isinstance(clause, BooleanClauseList):
         results = [matches(row, part) for part in clause.clauses]
         return all(results) if clause.operator is operators.and_ else any(results)
@@ -37,6 +41,14 @@ def matches(row: Any, clause: Any) -> bool:
         return getattr(row, clause.left.key, object()) == clause.right.value
     if isinstance(clause, BinaryExpression) and clause.operator is operators.in_op:
         return getattr(row, clause.left.key, object()) in clause.right.value
+    if isinstance(clause, BinaryExpression) and clause.operator is operators.ilike_op:
+        # `%needle%` against the row's string value, case-insensitively.
+        pattern = str(clause.right.value)
+        value = getattr(row, clause.left.key, None)
+        if value is None:
+            return False
+        needle = pattern.strip("%")
+        return needle in str(value).lower()
     if isinstance(clause, BinaryExpression) and clause.operator is operators.is_:
         # The tenant scoping adds `deleted_at IS NULL`.
         wanted = clause.right.value if hasattr(clause.right, "value") else None
@@ -65,6 +77,10 @@ def fake_session() -> MagicMock:
 
     session.add = MagicMock(side_effect=add)
     session.flush = AsyncMock(return_value=None)
+    # Phase 22 commits after writing its audit row; without this the service
+    # awaited a MagicMock.
+    session.commit = AsyncMock(return_value=None)
+    session.rollback = AsyncMock(return_value=None)
 
     async def execute(statement: Any) -> MagicMock:
         entity = statement.column_descriptions[0]["entity"]
@@ -74,6 +90,7 @@ def fake_session() -> MagicMock:
             for row in session.rows
             if isinstance(row, entity) and matches(row, clause)
         ]
+        matched = _window(matched, statement)
         result = MagicMock()
         result.scalars.return_value = result
         result.all.return_value = matched
@@ -82,6 +99,25 @@ def fake_session() -> MagicMock:
 
     session.execute = AsyncMock(side_effect=execute)
     return session
+
+
+def _window(rows: list[Any], statement: Any) -> list[Any]:
+    """Apply the statement's LIMIT and OFFSET.
+
+    A real repository paginates; a fake that ignored it returned every row, so a
+    test asserting "the tool clamps to 20 rows" would have been asserting
+    nothing. The clause attributes are private, which is the price of teaching
+    the fake something only the database enforces otherwise.
+    """
+    offset = getattr(statement, "_offset_clause", None)
+    limit = getattr(statement, "_limit_clause", None)
+    start = getattr(offset, "value", None) if offset is not None else None
+    size = getattr(limit, "value", None) if limit is not None else None
+    if start:
+        rows = rows[start:]
+    if size is not None:
+        rows = rows[:size]
+    return rows
 
 
 def written(session: MagicMock) -> list[Any]:

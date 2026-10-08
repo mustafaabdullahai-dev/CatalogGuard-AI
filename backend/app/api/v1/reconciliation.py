@@ -17,13 +17,12 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TenantScope, require_reconciliation_authority
 from app.core.logging import get_logger
 from app.db.session import get_session
-from app.models.catalog import Product, ProductRelationship
 from app.models.reconciliation import (
     ChangeProposal,
     Conflict,
@@ -39,24 +38,16 @@ from app.schemas.reconciliation import (
     ReconciliationRunRef,
     SimulationResponse,
 )
-from app.services.catalog.relationships import (
-    VARIATION_AXES,
-    RelationshipEdge,
-    TreeNode,
-)
-from app.services.catalog.repositories import CatalogRepository, ProductRepository
+from app.services.catalog.repositories import CatalogRepository
 from app.services.reconciliation import engine
 from app.services.reconciliation.repositories import (
     ChangeProposalRepository,
     ConflictRepository,
     ReconciliationRunRepository,
 )
-from app.services.simulation import (
-    CatalogSnapshot,
-    ProductState,
-    ProposedChange,
-    persist_simulation,
-    simulate,
+from app.services.simulation.service import (
+    SimulationRefusedError,
+    simulate_proposal,
 )
 
 router = APIRouter(tags=["reconciliation"])
@@ -184,75 +175,6 @@ async def list_change_proposals(
     )
 
 
-async def _snapshot_for(
-    db: AsyncSession,
-    scope: TenantScope,
-    *,
-    product: Product,
-    catalog_version: int,
-) -> CatalogSnapshot:
-    """Load enough of the tree to validate one proposal's move.
-
-    Not the whole catalog: a simulation answers "what does *this* change do",
-    and a field write can only disturb the product, its parent, its children
-    and their siblings. What the neighborhood does not contain is reported as
-    it was found, not guessed at — the next reconciliation pass reads the rest.
-    """
-    related = {product.id}
-    if product.parent_id is not None:
-        related.add(product.parent_id)
-    neighbors = await ProductRepository(db, scope.tenant).list(
-        limit=1000,
-        where=or_(Product.id.in_(related), Product.parent_id.in_(related)),
-    )
-    # A proposal's product may be the only row the query found (a brand-new
-    # catalog), and it must still appear in the tree it is being moved inside.
-    if not any(neighbor.id == product.id for neighbor in neighbors):
-        neighbors = [product, *neighbors]
-
-    nodes = tuple(
-        TreeNode(
-            id=neighbor.id,
-            sku=neighbor.sku,
-            title=neighbor.title,
-            is_parent=bool(neighbor.is_parent),
-            parent_id=neighbor.parent_id,
-            variation_attributes={
-                axis: neighbor.attributes[axis]
-                for axis in VARIATION_AXES
-                if neighbor.attributes.get(axis) not in (None, "")
-            },
-        )
-        for neighbor in neighbors
-    )
-    neighbor_ids = {neighbor.id for neighbor in neighbors}
-    rows = await db.execute(
-        select(ProductRelationship).where(
-            ProductRelationship.workspace_id == scope.workspace_id,
-            or_(
-                ProductRelationship.parent_id.in_(neighbor_ids),
-                ProductRelationship.child_id.in_(neighbor_ids),
-            ),
-        )
-    )
-    edges = tuple(
-        RelationshipEdge(
-            parent_id=relationship.parent_id,
-            child_id=relationship.child_id,
-            relationship_type=str(relationship.relationship_type),
-            established_by=relationship.established_by,
-            approved=relationship.approval_reference is not None,
-        )
-        for relationship in rows.scalars().all()
-    )
-    return CatalogSnapshot(
-        product=ProductState.from_product(product),
-        nodes=nodes,
-        edges=edges,
-        catalog_version=catalog_version,
-    )
-
-
 @router.post(
     "/change-proposals/{proposal_id}/simulate",
     response_model=SimulationResponse,
@@ -266,47 +188,41 @@ async def simulate_change_proposal(
     """Run §18's chain over a copy of the product and store what it predicted.
 
     The product row is never written: the outcome lands in a `SimulationRun`,
-    and the proposal moves to `simulated` or `rejected_by_validation`. A
-    proposal whose product or catalog is gone has no row to copy, so it is
-    refused rather than simulated against a snapshot assembled from nothing.
+    and the proposal moves to `simulated` or `rejected_by_validation`. The chain
+    itself is `app/services/simulation/service.py`, shared with the copilot's
+    `sandbox_simulator` tool, so a prediction a person reads here and one the
+    copilot quotes come from the same run.
     """
-    proposal = await ChangeProposalRepository(db, scope.tenant).get(proposal_id)
-    if proposal is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="proposal not found"
-        )
-    if proposal.product_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="a proposal with no product has nothing to simulate",
-        )
-    product = await ProductRepository(db, scope.tenant).get(proposal.product_id)
-    if product is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="the product this proposal targets no longer exists",
-        )
-    catalog = await CatalogRepository(db, scope.tenant).get(product.catalog_id)
-    if catalog is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="the catalog this product belongs to no longer exists",
-        )
-
-    snapshot = await _snapshot_for(
-        db, scope, product=product, catalog_version=catalog.current_version
-    )
-    result = await simulate(ProposedChange.from_proposal(proposal), snapshot)
-    run = await persist_simulation(db, scope.tenant, proposal=proposal, result=result)
+    try:
+        outcome = await simulate_proposal(db, scope.tenant, proposal_id=proposal_id)
+    except SimulationRefusedError as exc:
+        raise _simulation_refusal(exc) from exc
     logger.info(
         "simulation recorded",
-        proposal_id=str(proposal.id),
-        simulation_id=str(run.id),
-        validation_status=result.validation_status,
-        overall_risk=str(result.overall_risk),
+        proposal_id=str(proposal_id),
+        simulation_id=str(outcome.simulation_id),
+        validation_status=outcome.result.validation_status,
+        overall_risk=str(outcome.result.overall_risk),
     )
     return SimulationResponse.from_result(
-        simulation_id=run.id, proposal=proposal, result=result
+        simulation_id=outcome.simulation_id,
+        proposal=outcome.proposal,
+        result=outcome.result,
+    )
+
+
+def _simulation_refusal(exc: SimulationRefusedError) -> HTTPException:
+    """One refusal, one status code per reason (Phase 22)."""
+    if exc.reason == "proposal_not_found":
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="proposal not found")
+    if exc.reason == "no_product":
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="a proposal with no existing product has nothing to simulate",
+        )
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="the catalog this product belongs to no longer exists",
     )
 
 
