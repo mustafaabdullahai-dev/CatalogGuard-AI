@@ -29,7 +29,7 @@ decision written to an immutable audit row (§20, §38, §39) — are complete a
 tested, as is the execution engine that carries an approved change to a
 marketplace, reads it back to prove it landed, and rolls it back when it did
 not (§21, §51), with a `tool_calls` record of every tool invocation (§23) —
-all of it **956 backend tests** (953 passed, 3 opt-in live-provider tests skipped)
+all of it **1009 backend tests** (1006 passed, 3 opt-in live-provider tests skipped)
 and a **79-test frontend suite**.
 The marketplace seam those writes go through exists too: one interface, one
 mock adapter, credentials encrypted at rest (§22, §33, D-005), with every live
@@ -47,6 +47,15 @@ pages — Product Detail, Marketplace Connections, Agent Activity — are not bu
 because no API route serves a product, a connection or an agent run; and it has
 never run against the real backend, because no database has ever been reachable
 (D-006).
+
+The copilot (`POST /api/v1/copilot/query`) answers questions about a workspace
+through five read-only tools — product lookup, conflict search, change search,
+compliance search with citations, and the sandbox — behind a new `use_copilot`
+capability held by the ops manager and the data steward. It cannot create,
+approve or execute anything, every claim is checked against the tools that
+actually ran, and an answer it cannot cite is a 502 rather than a paragraph
+(D-024). It is an API only: no console panel, no streaming, and no model has
+ever answered, because the Qroq key is still awaiting rotation.
 
 A live LLM provider **has** now been called three times: two schema-validated
 answers, fast and reasoning tier, plus a real tool call that resolved source
@@ -100,6 +109,7 @@ Every phase's delivery, gates and gaps are recorded in
 | Sandbox simulation: §18 chain on a copy, §19 diff, `POST /change-proposals/{id}/simulate` | Implemented, 31 tests; compliance stage skipped (no corpus), route untested against a database |
 | Console: dashboard, catalog explorer, approval center, reconciliation canvas, sandbox, compliance center | Implemented, 79 frontend tests; six screens driven in a browser (Chrome DevTools), Lighthouse accessibility 100 on three pages; **never run against the real backend** (D-006), and three §30 pages have no route to render |
 | Approval decisions from the UI: approve, edit, reject, re-analysis, bulk, approve-all-LOW | Implemented; verified in a browser against a stub API — CSRF token and `X-Workspace-Id` on every write, each decision removed its row from the queue |
+| Copilot: five read-only catalog tools, enforced citations, `use_copilot` gate (§31, D-024) | Implemented, 53 tests; **API only** — no console panel, no streaming, and no model has answered yet (Qroq key unrotated); rate limiting is per process |
 | Outbound mail transport | Not configured; messages queue to `email_outbox` (D-017) |
 
 Users cannot self-register: the first administrator is created by a CLI, and
@@ -177,7 +187,7 @@ Swagger UI at `http://localhost:3000/docs` when the frontend proxies, or
 ### Tests and lint
 
 ```bash
-python -m pytest -q                   # 953 passed, 3 skipped, no database required
+python -m pytest -q                   # 1006 passed, 3 skipped, no database required
 cd frontend && npm test               # 79 vitest tests (pure modules, fixtures, write client)
 CATALOGGUARD_LIVE_LLM=1 python -m pytest tests/agent -q   # opt-in: 3 live LLM calls (2 schemas + 1 tool call)
 python -m ruff check app tests alembic scripts

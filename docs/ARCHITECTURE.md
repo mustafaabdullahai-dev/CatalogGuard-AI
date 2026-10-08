@@ -508,6 +508,45 @@ lib/
 
 ---
 
+## Copilot (D-024, Phase 22)
+
+§31 asks for an assistant that uses tools instead of remembering. The shape that
+satisfies it is narrow, and the narrowness is the design:
+
+```
+question ──► bounded tool loop (Phase 14's client, llm_max_tool_rounds)
+                │
+                ├─ product_lookup      product + its conflicts + its proposals
+                ├─ conflict_search     disagreements, ranked, with the products
+                ├─ change_search       proposals by risk / channel / field / status
+                ├─ compliance_search   cited chunks + the signals that ranked them
+                ├─ sandbox_simulator   §18's chain on a copy
+                └─ Phase 15's four     authority, identity, risk, normalization
+                │
+                ▼
+           CopilotAnswer { answer, citations[], insufficient_data, follow_ups[] }
+                │
+                ├─ every citation checked against the tools that actually ran
+                ├─ tools_used replaced with the registry's execution list
+                └─ one agent_runs row, one tool_calls row per call, one audit row
+```
+
+- **One capability, one route.** `use_copilot` sits with the ops manager and the
+  data steward; the router exposes a single POST that cannot change anything, so
+  there is no second gate to drift from the first.
+- **Citations are checked, not requested.** A citation naming a tool that never
+  ran is dropped; an uncited claim gets one repair with the complaint in the
+  prompt; a second failure is a 502. The model's account of its own tool use is
+  discarded.
+- **Subordinate by construction.** No tool creates, approves or executes. The
+  sandbox is the only write, and it writes a simulation — on a copy.
+- **Untrusted content stays data** (§34): tool results arrive in
+  `<tool_result>` blocks behind the policy preamble, prior turns are labelled as
+  context rather than instructions, and the role tells the model to report
+  hostile catalog content rather than act on it.
+
+---
+
 ## Observability and data residency (D-010)
 
 Catalogs contain proprietary manufacturer files, wholesale margins, and
@@ -626,3 +665,12 @@ marketplace listings. Telemetry must not leave our infrastructure.
 - **No screen can start an execution.** The execution engine (D-022) has no
   route of its own and the capability matrix has no `execute` capability, so
   approving a change decides it and stops there.
+- **The copilot has never called a model.** The Qroq key is the shared plaintext
+  one awaiting rotation, so Phase 22's turns are tested against a scripted
+  client. Its rules — citations, refusals, budgets — are proven; its latency,
+  token cost and the provider's actual behaviour are not.
+- **The copilot's rate limit is per process.** Several workers means several
+  budgets. A shared counter belongs on Redis, whose credentials are unrotated
+  (D-024).
+- **Six of §23's eighteen tools exist**, so questions needing the other twelve
+  get "I cannot see that" rather than an approximation.
