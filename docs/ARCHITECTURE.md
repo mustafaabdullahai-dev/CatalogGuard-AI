@@ -470,6 +470,44 @@ app/connectors/
 
 ---
 
+## The console (D-001, D-023, Phase 21)
+
+Six screens, one data rule: **the page says where its numbers came from.**
+
+```
+app/
+   page.tsx          dashboard    totals read from five list endpoints
+   catalog/          explorer     GET /products, GET-form filters, pagination
+   approvals/        center       GET /approvals + the four decisions
+   reconciliation/   workspace    Source → Truth → Analysis canvas
+   sandbox/          sandbox      POST …/simulate, stages + diff + impact
+   compliance/       center       GET /compliance/search, cited hits
+
+lib/
+   api.ts            server reads: cookies forwarded, workspace from the session,
+                     every read returns { data, source, reason }
+   writeClient.ts    browser writes: same-origin /api/*, CSRF, refusal wording
+   pagination.ts     URL state: page arithmetic, query building, pluralisation
+   provenance.ts     the canvas: ranked claims, authority resolution, ties
+   diff.ts           the sandbox: diff rows, impact report, stage wording
+   notices.ts        what each fallback reason says, in one place
+```
+
+- **One origin.** Reads run in server components and forward the cookies the
+  browser sent; writes go from the browser through the `/api/*` rewrite. Same
+  origin means the session cookie stays on this host and no CORS grant is
+  load-bearing (D-014's revocation rests on that).
+- **The workspace comes from the session**, never from configuration.
+- **Filters are URLs.** No client store for table state; a filtered view is
+  shareable, back-button-correct and works without JavaScript.
+- **Three rules the screens repeat because the backend owns them:** a proposal
+  the sandbox has not validated cannot be approved; a CRITICAL item needs a
+  second approver; a stage that did not run is `not run`, never a pass (§18).
+- **The risk bands are readable text.** `--band-*` tokens exist because the
+  vivid band colours measured 1.9:1–3.1:1 as badge text; the hues are unchanged.
+
+---
+
 ## Observability and data residency (D-010)
 
 Catalogs contain proprietary manufacturer files, wholesale margins, and
@@ -574,3 +612,17 @@ marketplace listings. Telemetry must not leave our infrastructure.
   who may press that button is a decision, not a default.
 - **Dramatiq has no delayed-job scheduling.** Scheduled compliance scans will
   need APScheduler or cron-driven enqueue.
+- **The console has never talked to the real backend.** Phase 21 drove all six
+  screens in a browser against a throwaway stub that answered the same routes
+  with the same field names, because D-006 still records the database as
+  unconfirmed. The frontend's contract is verified; the backend's behaviour on
+  these pages is not, and the stub is not in the repository.
+- **Three §30 pages are missing** — Product Detail, Marketplace Connections,
+  Agent Activity — because no route serves a product, a connection or an agent
+  run. The dashboard shows what it can and names the gap instead of linking to
+  pages that could only render invented data.
+- **The catalog's text filter is page-local.** `GET /products` accepts `limit`
+  and `offset` only, so a filter narrows the loaded page and the UI says so.
+- **No screen can start an execution.** The execution engine (D-022) has no
+  route of its own and the capability matrix has no `execute` capability, so
+  approving a change decides it and stops there.

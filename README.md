@@ -9,10 +9,10 @@ simulates. Humans approve. Connectors execute. Logs remember.
 
 ## Current status
 
-**Phases 8–19: authentication, catalog domain, conflicts, risk, ingestion, the
+**Phases 8–21: authentication, catalog domain, conflicts, risk, ingestion, the
 canonical model, reconciliation, the compliance corpus, LangGraph orchestration,
-AI tools, sandbox simulation, the approval workflow and the marketplace
-seam.** Sign-in, tenant isolation, the catalog domain
+AI tools, sandbox simulation, the approval workflow, the marketplace seam, the
+execution engine and the console.** Sign-in, tenant isolation, the catalog domain
 (normalization, identity, relationships, source authority), conflict detection,
 deterministic risk scoring, catalog ingestion (validation, CSV/JSON/Excel parsing,
 schema detection and raw storage), canonicalization (raw records → `products`,
@@ -29,10 +29,24 @@ decision written to an immutable audit row (§20, §38, §39) — are complete a
 tested, as is the execution engine that carries an approved change to a
 marketplace, reads it back to prove it landed, and rolls it back when it did
 not (§21, §51), with a `tool_calls` record of every tool invocation (§23) —
-all of it **956 tests**, of which three are opt-in live-provider tests.
+all of it **956 backend tests** (953 passed, 3 opt-in live-provider tests skipped)
+and a **79-test frontend suite**.
 The marketplace seam those writes go through exists too: one interface, one
 mock adapter, credentials encrypted at rest (§22, §33, D-005), with every live
 integration still deferred.
+
+The console is six screens on top of those routes: dashboard, catalog explorer,
+approval center (whose four decisions now call the API and write the same audit
+rows the backend wrote in Phase 18), the Source → Truth → Analysis
+reconciliation canvas with per-attribute provenance, the sandbox with §18's
+stages and §19's diff, and compliance search with a citation on every hit. It
+forwards the session cookie from the server, sends writes through the same origin
+with the CSRF token, states in a banner whenever it is showing fixtures, and
+scores **100 for accessibility** in Lighthouse on the pages audited. Three §30
+pages — Product Detail, Marketplace Connections, Agent Activity — are not built,
+because no API route serves a product, a connection or an agent run; and it has
+never run against the real backend, because no database has ever been reachable
+(D-006).
 
 A live LLM provider **has** now been called three times: two schema-validated
 answers, fast and reasoning tier, plus a real tool call that resolved source
@@ -84,7 +98,8 @@ Every phase's delivery, gates and gaps are recorded in
 | Agent tools: normalize_field, resolve_source_authority, resolve_identity, assess_change_risk (§23) | Implemented, 30 tests + 1 opt-in live tool-call test; 4 of §23's 18 tools |
 | `tool_calls` and `agent_runs` records: one row per dispatch through `ToolRegistry`, arguments masked (§23, D-010) | Implemented, 9 tests; **nothing writes them in production** — no recorder attached to a live caller |
 | Sandbox simulation: §18 chain on a copy, §19 diff, `POST /change-proposals/{id}/simulate` | Implemented, 31 tests; compliance stage skipped (no corpus), route untested against a database |
-| Frontend: dashboard, catalog explorer, approval center | Implemented, unit tested |
+| Console: dashboard, catalog explorer, approval center, reconciliation canvas, sandbox, compliance center | Implemented, 79 frontend tests; six screens driven in a browser (Chrome DevTools), Lighthouse accessibility 100 on three pages; **never run against the real backend** (D-006), and three §30 pages have no route to render |
+| Approval decisions from the UI: approve, edit, reject, re-analysis, bulk, approve-all-LOW | Implemented; verified in a browser against a stub API — CSRF token and `X-Workspace-Id` on every write, each decision removed its row from the queue |
 | Outbound mail transport | Not configured; messages queue to `email_outbox` (D-017) |
 
 Users cannot self-register: the first administrator is created by a CLI, and
@@ -163,6 +178,7 @@ Swagger UI at `http://localhost:3000/docs` when the frontend proxies, or
 
 ```bash
 python -m pytest -q                   # 953 passed, 3 skipped, no database required
+cd frontend && npm test               # 79 vitest tests (pure modules, fixtures, write client)
 CATALOGGUARD_LIVE_LLM=1 python -m pytest tests/agent -q   # opt-in: 3 live LLM calls (2 schemas + 1 tool call)
 python -m ruff check app tests alembic scripts
 python -m mypy app
