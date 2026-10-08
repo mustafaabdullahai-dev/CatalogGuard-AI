@@ -24,7 +24,7 @@ const STATE_DOT: Record<AgentState, string> = {
  */
 export function AgentPanel({ runs }: { runs: AgentRun[] }) {
   return (
-    <section className="card">
+    <section className="card agent-panel">
       <header className="card-header">
         <span className="card-title">Agent activity</span>
         <span className="card-hint">latest run</span>

@@ -1,195 +1,100 @@
-import { RiskBadge, NeutralBadge } from "@/components/RiskBadge";
+import { ApprovalQueue } from "@/components/ApprovalQueue";
 import { Shell } from "@/components/Shell";
-import { getApprovals, usingFixtures } from "@/lib/api";
-import { formatConfidence, formatRelative, humanizeField } from "@/lib/format";
+import { CarryFilters, FilterBar, SelectFilter } from "@/components/FilterBar";
+import { Pagination } from "@/components/Pagination";
+import { DataSourceNotice, EmptyState } from "@/components/StateBlocks";
+import { getApprovals, pageContext } from "@/lib/api";
+import { clampPageSize, pageWindow } from "@/lib/pagination";
 
 export const dynamic = "force-dynamic";
 
 /**
  * Approval center.
  *
- * One change per card, and the card leads with the risk band, the change itself,
- * and the factors that produced the score. The buttons are rendered disabled on
- * purpose: approval mutates a live marketplace listing, and the backend route
- * that does it is not built yet. A live-looking approve button with no
- * implementation behind it is the most damaging thing this screen could ship.
+ * The buttons are live when a workspace is connected: they call the Phase 18
+ * routes, which write an audit row per decision and refuse anything the
+ * backend will not accept — a CRITICAL item that still needs its second
+ * approver, or a proposal the sandbox has not validated. In fixture mode they
+ * render disabled and say why, because a working-looking button with nothing
+ * behind it is the most damaging thing this screen could ship.
  */
-export default async function ApprovalsPage() {
-  const requests = await getApprovals();
-  const pending = requests.filter((r) => r.status === "pending");
-  const ordered = [...pending].sort(
-    (a, b) => b.risk_score - a.risk_score || Date.parse(a.requested_at) - Date.parse(b.requested_at),
-  );
-  const multi = pending.filter((r) => r.required_approvals > 1).length;
+export default async function ApprovalsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await searchParams;
+  const context = await pageContext();
+  const limit = clampPageSize(first(params.page_size));
+  const risk = first(params.risk) ?? "";
+
+  const queue = await getApprovals(context, { limit, offset: 0, riskLevel: risk === "" ? undefined : risk });
+  let window = pageWindow({ page: first(params.page), limit, total: queue.data.total });
+  if (window.offset !== queue.data.offset) {
+    const shifted = await getApprovals(context, {
+      limit,
+      offset: window.offset,
+      riskLevel: risk === "" ? undefined : risk,
+    });
+    window = pageWindow({ page: first(params.page), limit, total: shifted.data.total });
+    queue.data = shifted.data;
+  }
+
+  const items = queue.data.items;
+  const needsTwo = items.filter((item) => (item.required_approvals ?? 1) > 1).length;
+  const filters: Record<string, string | undefined> = {
+    risk: risk === "" ? undefined : risk,
+    page_size: String(limit),
+  };
 
   return (
     <Shell
       title="Approval center"
-      subtitle={`${pending.length} pending${multi > 0 ? ` · ${multi} need more than one approval` : ""}`}
-      badges={{ "/approvals": pending.length }}
+      subtitle={[
+        `${window.total.toLocaleString()} awaiting a decision`,
+        needsTwo > 0
+          ? `${needsTwo} on this page ${needsTwo === 1 ? "needs" : "need"} more than one approver`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
+      badges={{ "/approvals": window.total }}
     >
-      {usingFixtures() ? (
-        <div className="notice">
-          Showing fixture data. Approve and reject are not wired to a backend route yet —
-          the controls below stay disabled until one exists.
-        </div>
-      ) : null}
+      <DataSourceNotice source={queue.source} reason={queue.reason} />
 
-      {ordered.length === 0 ? (
-        <section className="card">
-          <p className="empty">Nothing is waiting for a decision.</p>
-        </section>
+      <FilterBar action="/approvals">
+        <SelectFilter
+          name="risk"
+          label="Risk band"
+          defaultValue={risk}
+          options={[
+            { value: "", label: "All bands" },
+            { value: "CRITICAL", label: "CRITICAL" },
+            { value: "HIGH", label: "HIGH" },
+            { value: "MEDIUM", label: "MEDIUM" },
+            { value: "LOW", label: "LOW" },
+          ]}
+        />
+        <SelectFilter
+          name="page_size"
+          label="Rows"
+          defaultValue={String(limit)}
+          options={[25, 50, 100, 200].map((size) => ({ value: String(size), label: `${size} per page` }))}
+        />
+        <CarryFilters filters={filters} except={["risk", "page_size"]} />
+      </FilterBar>
+
+      {items.length === 0 ? (
+        <EmptyState title="Nothing is waiting" body="Every proposal in this workspace has been decided." />
       ) : (
-        <div className="stack">
-          {ordered.map((request, index) => (
-            <section className="card rise" key={request.id} style={{ animationDelay: `${index * 40}ms` }}>
-              <header className="card-header">
-                <RiskBadge level={request.risk_level} score={request.risk_score} />
-                <span className="card-title">{humanizeField(request.field_name)}</span>
-                <span className="card-hint mono">
-                  {request.change_ref} · {request.product_id?.slice(0, 8)}
-                </span>
-              </header>
-              <div className="card-body stack" style={{ gap: 14 }}>
-                <div>
-                  <div style={{ color: "rgb(var(--text-subtle))", fontSize: 12, marginBottom: 2 }}>
-                    {request.product_title}
-                  </div>
-                  <div style={{ fontSize: 16 }}>
-                    <span style={{ color: "rgb(var(--text-subtle))" }}>
-                      {request.current_value ?? "—"}
-                    </span>
-                    <span style={{ margin: "0 8px", color: "rgb(var(--text-subtle))" }}>→</span>
-                    <strong>{request.proposed_value ?? "—"}</strong>
-                  </div>
-                </div>
-
-                <dl className="kv">
-                  <dt>Why this change</dt>
-                  <dd>{request.reason}</dd>
-                  <dt>Confidence</dt>
-                  <dd>{formatConfidence(request.confidence)}</dd>
-                  <dt>Raised</dt>
-                  <dd>{formatRelative(request.requested_at)}</dd>
-                  <dt>Approvals</dt>
-                  <dd>
-                    {request.approvals_received} of {request.required_approvals}
-                    {request.approvals_received < request.required_approvals ? (
-                      <span style={{ color: "rgb(var(--text-subtle))" }}> — a second approver is required</span>
-                    ) : null}
-                  </dd>
-                </dl>
-
-                <div>
-                  <div
-                    style={{
-                      color: "rgb(var(--text-muted))",
-                      fontSize: 12,
-                      marginBottom: 6,
-                      fontWeight: 600,
-                      textTransform: "uppercase",
-                      letterSpacing: "0.06em",
-                    }}
-                  >
-                    Why it scores {request.risk_score}
-                  </div>
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Factor</th>
-                          <th className="num">Weight</th>
-                          <th>Detail</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {request.risk_factors.map((factor) => (
-                          <tr key={factor.code}>
-                            <td className="mono">{factor.code}</td>
-                            <td className="num">{factor.weight}</td>
-                            <td style={{ color: "rgb(var(--text-muted))" }}>{factor.detail}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                {request.competing_values.length > 1 ? (
-                  <div>
-                    <div
-                      style={{
-                        color: "rgb(var(--text-muted))",
-                        fontSize: 12,
-                        marginBottom: 6,
-                        fontWeight: 600,
-                        textTransform: "uppercase",
-                        letterSpacing: "0.06em",
-                      }}
-                    >
-                      Competing values
-                    </div>
-                    <div className="table-wrap">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>Source</th>
-                            <th>Value</th>
-                            <th className="num">Authority rank</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {request.competing_values.map((entry) => (
-                            <tr key={entry.source}>
-                              <td>
-                                <NeutralBadge>{entry.source}</NeutralBadge>
-                              </td>
-                              <td>{entry.value}</td>
-                              <td className="num">{entry.rank}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                ) : null}
-
-                {request.channels.length > 0 ? (
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                    <span style={{ color: "rgb(var(--text-subtle))", fontSize: 12 }}>Affected channels:</span>
-                    {request.channels.map((channel) => (
-                      <NeutralBadge key={channel}>{channel}</NeutralBadge>
-                    ))}
-                  </div>
-                ) : (
-                  <div style={{ color: "rgb(var(--text-subtle))", fontSize: 12 }}>
-                    No live channel is affected by this change.
-                  </div>
-                )}
-
-                <div className="toolbar" style={{ borderTop: "1px solid rgb(var(--border))", paddingTop: 12 }}>
-                  <button type="button" className="button button-primary" disabled>
-                    Approve
-                  </button>
-                  <button type="button" className="button" disabled>
-                    Approve with edits
-                  </button>
-                  <button type="button" className="button" disabled>
-                    Reject
-                  </button>
-                  <button type="button" className="button button-ghost" disabled>
-                    Request re-analysis
-                  </button>
-                  <span className="spacer" />
-                  <span style={{ color: "rgb(var(--text-subtle))", fontSize: 12 }}>
-                    Disabled: no execution route exists yet
-                  </span>
-                </div>
-              </div>
-            </section>
-          ))}
-        </div>
+        <ApprovalQueue items={items} live={queue.source === "live"} />
       )}
+
+      <Pagination path="/approvals" filters={filters} window={window} noun="proposals" />
     </Shell>
   );
+}
+
+function first(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
 }

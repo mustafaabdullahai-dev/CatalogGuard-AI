@@ -21,8 +21,12 @@
   --border: 226 232 240;
   --border-strong: 203 213 225;
   --text: 15 23 42;
-  --text-muted: 100 116 139;
-  --text-subtle: 148 163 184;
+  /* Contrast-checked against `--surface` (white): muted is slate-600 at 7.5:1
+     and subtle is slate-500 at 4.8:1, both over the 4.5:1 §61 asks for. The
+     earlier pair (slate-500 / slate-400) put subtle at 2.3:1, which is what
+     Lighthouse reported on the nav labels and page subtitles. */
+  --text-muted: 71 85 105;
+  --text-subtle: 100 116 139;
   --primary: 79 70 229;
   --primary-hover: 67 56 202;
   --primary-soft: 238 242 255;
@@ -37,6 +41,17 @@
   --critical-soft: 255 228 230;
   --info: 56 189 248;
   --info-soft: 224 242 254;
+  /*
+   * Band text, distinct from the band colour. The vivid `--success` /
+   * `--warning` / `--danger` / `--critical` values are right for a dot or a
+   * meter fill and wrong for small text: on their own pale backgrounds they
+   * measured 1.9:1–3.1:1, which §61 cannot accept on the badges that carry the
+   * risk bands. These are the same hues at a lightness that reads on white.
+   */
+  --band-low: 6 95 70;
+  --band-medium: 146 64 14;
+  --band-high: 185 28 28;
+  --band-critical: 159 18 57;
   --shadow-sm: 0 1px 2px rgb(15 23 42 / 0.06);
   --shadow-md: 0 4px 12px rgb(15 23 42 / 0.08);
 }
@@ -50,22 +65,36 @@
   --border: 32 41 59;
   --border-strong: 51 65 85;
   --text: 226 232 240;
-  --text-muted: 148 163 184;
-  --text-subtle: 100 116 139;
+  /* Dark-theme counterparts of the light pair above: slate-500 on a near-black
+     surface measured 3.86:1 and failed §61 on the nav labels and subtitles, so
+     both steps moved up until they cleared 4.5:1 with the hierarchy intact. */
+  --text-muted: 165 180 200;
+  --text-subtle: 139 152 175;
   --primary: 129 140 248;
   --primary-hover: 165 180 252;
   --primary-soft: 30 27 75;
   --ring: 129 140 248;
   --success: 52 211 153;
-  --success-soft: 6 78 59;
+  --success-soft: 2 44 34;
   --warning: 251 191 36;
-  --warning-soft: 120 53 15;
+  --warning-soft: 69 26 3;
   --danger: 248 113 113;
-  --danger-soft: 127 29 29;
+  --danger-soft: 69 10 10;
   --critical: 251 113 133;
-  --critical-soft: 136 19 55;
+  --critical-soft: 76 5 25;
   --info: 56 189 248;
-  --info-soft: 12 74 110;
+  --info-soft: 7 45 74;
+  --band-low: 110 231 183;
+  --band-medium: 252 211 77;
+  --band-high: 252 165 165;
+  --band-critical: 253 164 175;
+  /*
+   * The `-soft` steps are badge backgrounds, so in dark mode they have to be
+   * dark enough for the bright band colour to clear 4.5:1 on top of them: the
+   * previous mid-tones put CRITICAL at 3.55:1 and HIGH at 3.62:1, which is
+   * unreadable for the one piece of text that must never be hard to read. The
+   * hue of each band is unchanged, so the four bands stay distinguishable.
+   */
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
   --shadow-md: 0 4px 16px rgb(0 0 0 / 0.45);
 }
@@ -151,10 +180,11 @@ a:hover {
   padding: 6px 8px 18px;
 }
 
+/* 3:2 source image (1536x1024), so the rendered box keeps that ratio. */
 .brand img {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
+  width: 30px;
+  height: 20px;
+  border-radius: 4px;
 }
 
 .brand-name {
@@ -317,11 +347,11 @@ a:hover {
 }
 
 .up {
-  color: rgb(var(--success));
+  color: rgb(var(--band-low));
 }
 
 .down {
-  color: rgb(var(--danger));
+  color: rgb(var(--band-high));
 }
 
 /* ---- tables ---------------------------------------------------------- */
@@ -385,25 +415,25 @@ tbody tr:hover td {
 
 .badge-LOW {
   background: rgb(var(--success-soft));
-  color: rgb(var(--success));
+  color: rgb(var(--band-low));
   border-color: rgb(var(--success) / 0.3);
 }
 
 .badge-MEDIUM {
   background: rgb(var(--warning-soft));
-  color: rgb(var(--warning));
+  color: rgb(var(--band-medium));
   border-color: rgb(var(--warning) / 0.3);
 }
 
 .badge-HIGH {
   background: rgb(var(--danger-soft));
-  color: rgb(var(--danger));
+  color: rgb(var(--band-high));
   border-color: rgb(var(--danger) / 0.3);
 }
 
 .badge-CRITICAL {
   background: rgb(var(--critical-soft));
-  color: rgb(var(--critical));
+  color: rgb(var(--band-critical));
   border-color: rgb(var(--critical) / 0.4);
 }
 
@@ -757,4 +787,453 @@ tbody tr:hover td {
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* ---- Phase 21 additions ---------------------------------------------- */
+
+/*
+ * The AI accent (D-001 reserved indigo→violet for AI affordances) was the one
+ * token with no light-mode value: the components used `--primary`, so an AI
+ * affordance could not be distinguished from an ordinary action in either
+ * theme. `--ai` and `--ai-soft` now exist per theme, and the agent panels are
+ * the only consumers.
+ */
+:root,
+[data-theme="light"] {
+  --ai: 124 58 237;
+  --ai-soft: 237 233 254;
+  --ai-text: 76 29 149;
+}
+
+[data-theme="dark"] {
+  --ai: 167 139 250;
+  --ai-soft: 48 28 90;
+  --ai-text: 221 214 254;
+}
+
+.skip-link {
+  position: absolute;
+  left: 8px;
+  top: -48px;
+  z-index: 40;
+  padding: 8px 12px;
+  background: rgb(var(--surface-raised));
+  color: rgb(var(--text));
+  border: 1px solid rgb(var(--border-strong));
+  border-radius: 8px;
+  font-size: 13px;
+  transition: none;
+}
+
+.skip-link:focus {
+  top: 8px;
+}
+
+.main:focus {
+  outline: none;
+}
+
+.main:focus-visible {
+  outline: 2px solid rgb(var(--ring));
+  outline-offset: -2px;
+}
+
+/* Filters are a form, so the controls need labels rather than placeholders. */
+.filter-bar {
+  align-items: flex-end;
+}
+
+.field-inline {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field-inline.grow {
+  flex: 1;
+  min-width: 260px;
+}
+
+.field-inline.grow .input {
+  max-width: none;
+  width: 100%;
+}
+
+.field-inline .field-label {
+  font-size: 11px;
+}
+
+.filter-note,
+.selection-count {
+  color: rgb(var(--text-subtle));
+  font-size: 12px;
+}
+
+.field-error {
+  color: rgb(var(--band-high));
+  font-size: 12px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pagination-status,
+.pagination-page {
+  color: rgb(var(--text-subtle));
+  font-size: 12px;
+}
+
+.pagination .button,
+.button-disabled {
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+/*
+ * `disabled` on a real button is invisible without this. It matters here because
+ * the fixture-mode approval controls must look unavailable: a primary-styled
+ * button that does nothing is the mistake D-020's approval gate exists to stop.
+ */
+.button:disabled,
+button.button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+  filter: grayscale(0.4);
+}
+
+.button-danger {
+  background: rgb(var(--band-high));
+  border-color: rgb(var(--band-high));
+  color: rgb(255 255 255);
+}
+
+.button-danger:hover {
+  filter: brightness(1.05);
+}
+
+.notice-ok {
+  border-left-color: rgb(var(--success));
+}
+
+.notice-bad {
+  border-left-color: rgb(var(--danger));
+  color: rgb(var(--text));
+}
+
+.empty-state {
+  text-align: left;
+}
+
+.empty-state-title {
+  font-weight: 600;
+}
+
+.empty-state .empty {
+  text-align: left;
+  padding: 6px 0 0;
+}
+
+.page-footnote {
+  color: rgb(var(--text-subtle));
+  font-size: 12px;
+  margin: 0;
+  max-width: 80ch;
+}
+
+.badge-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.small {
+  font-size: 11px;
+}
+
+.small.mono {
+  color: rgb(var(--text-subtle));
+}
+
+.text-bad {
+  color: rgb(var(--band-high));
+}
+
+.text-warn {
+  color: rgb(var(--band-medium));
+}
+
+.change-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 15px;
+}
+
+.change-line.compact {
+  font-size: 13px;
+}
+
+.change-before {
+  color: rgb(var(--text-subtle));
+}
+
+.change-after {
+  color: rgb(var(--text));
+}
+
+.change-arrow {
+  color: rgb(var(--text-subtle));
+}
+
+.reason-line {
+  color: rgb(var(--text-muted));
+  font-size: 13px;
+  margin: 6px 0 0;
+  max-width: 90ch;
+}
+
+/* Native <dialog>: the focus trap, Escape and aria-modal come from the element. */
+.dialog {
+  border: 1px solid rgb(var(--border-strong));
+  border-radius: 12px;
+  background: rgb(var(--surface-raised));
+  color: rgb(var(--text));
+  padding: 0;
+  max-width: 520px;
+  width: calc(100vw - 32px);
+  box-shadow: rgb(var(--shadow-md));
+}
+
+.dialog-wide {
+  max-width: 780px;
+}
+
+.dialog::backdrop {
+  background: rgb(2 6 23 / 0.6);
+}
+
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+}
+
+.dialog-title {
+  font-size: 16px;
+  margin: 0;
+}
+
+.dialog-text {
+  color: rgb(var(--text-muted));
+  font-size: 13px;
+  margin: 0;
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.dialog .field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dialog textarea.input {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.section-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgb(var(--text-muted));
+  margin: 0 0 6px;
+}
+
+.verdict-list,
+.evidence-list,
+.stage-list,
+.source-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.verdict-list li,
+.stage-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.evidence-list li {
+  border-left: 2px solid rgb(var(--border-strong));
+  padding-left: 10px;
+}
+
+.source-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Source → Truth → Analysis */
+.canvas {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: rgb(var(--border));
+  border-top: 1px solid rgb(var(--border));
+}
+
+@media (max-width: 1180px) {
+  .canvas {
+    grid-template-columns: 1fr;
+  }
+}
+
+.canvas-column {
+  background: rgb(var(--surface));
+  min-width: 0;
+}
+
+.canvas-title {
+  padding: 10px 14px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgb(var(--text-muted));
+  border-bottom: 1px solid rgb(var(--border));
+}
+
+.canvas-body {
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.attr-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed rgb(var(--border));
+}
+
+.attr-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.attr-field {
+  font-size: 11px;
+  color: rgb(var(--text-muted));
+}
+
+.claim {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.claim-value.truth {
+  color: rgb(var(--text));
+  font-weight: 550;
+}
+
+.analysis-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.cell-before,
+.cell-after {
+  max-width: 26ch;
+  overflow-wrap: anywhere;
+}
+
+.row-risky td {
+  background: rgb(var(--warning-soft));
+}
+
+.hit {
+  border: 1px solid rgb(var(--border));
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgb(var(--surface-sunken));
+}
+
+.hit-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.hit-title {
+  font-weight: 600;
+}
+
+.hit-score {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--text-subtle));
+  font-size: 12px;
+}
+
+.hit-content {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: rgb(var(--text));
+  max-width: 90ch;
+}
+
+/*
+ * Neutral, deliberately: D-001 reserves the indigo→violet ramp for AI
+ * affordances, and this banner is the retrieval layer stating its own limits,
+ * not a model speaking. The accent stays on the agent panels.
+ */
+.compliance-note {
+  margin: 0;
+  font-size: 12px;
+  color: rgb(var(--text-muted));
+  background: rgb(var(--surface-sunken));
+  border: 1px solid rgb(var(--border));
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+
+.agent-panel .badge-HIGH,
+.agent-panel .badge-MEDIUM {
+  background: rgb(var(--ai-soft));
+  color: rgb(var(--ai-text));
 }

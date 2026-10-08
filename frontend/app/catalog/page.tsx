@@ -1,125 +1,172 @@
-import { NeutralBadge, RiskBadge } from "@/components/RiskBadge";
+import { NeutralBadge } from "@/components/RiskBadge";
 import { Shell } from "@/components/Shell";
-import { getProducts, usingFixtures } from "@/lib/api";
-import { formatCompact, formatMoney } from "@/lib/format";
-import type { Product, RiskLevel } from "@/lib/types";
+import { CarryFilters, FilterBar, SelectFilter, TextFilter } from "@/components/FilterBar";
+import { Pagination } from "@/components/Pagination";
+import { DataSourceNotice, EmptyState } from "@/components/StateBlocks";
+import { getProducts, pageContext } from "@/lib/api";
+import { formatRelative } from "@/lib/format";
+import { PAGE_SIZES, clampPageSize, matchesText, pageWindow, plural } from "@/lib/pagination";
 
 export const dynamic = "force-dynamic";
 
-const STATUS_BADGE: Record<Product["status"], string> = {
-  active: "badge-LOW",
-  draft: "badge-MEDIUM",
-  archived: "badge-neutral",
-  suppressed: "badge-CRITICAL",
+const STATUS_TONE: Record<string, string> = {
+  active: "LOW",
+  draft: "MEDIUM",
+  archived: "neutral",
+  suppressed: "CRITICAL",
 };
 
 /**
- * Band derived from open conflicts, mirroring the dashboard's rule.
+ * Catalog explorer.
  *
- * It is not the risk engine — nothing here proposes a change. It answers a
- * different question: which rows need attention first.
+ * Filters are a GET form over the query string, so a filtered view is a URL
+ * someone can share or return to. One honest limitation: `GET /products` takes
+ * `limit` and `offset` and nothing else, so `q` is matched against the rows
+ * loaded on this page and the filter bar says exactly that. Wiring it to a real
+ * query parameter is a backend change, and pretending otherwise would let a
+ * reviewer conclude a SKU does not exist because it sits on page 3.
  */
-function urgency(conflicts: number): RiskLevel {
-  if (conflicts >= 5) return "HIGH";
-  if (conflicts >= 2) return "MEDIUM";
-  if (conflicts >= 1) return "LOW";
-  return "LOW";
-}
+export default async function CatalogPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await searchParams;
+  const context = await pageContext();
+  const limit = clampPageSize(first(params.page_size));
+  const q = first(params.q) ?? "";
+  const status = first(params.status) ?? "";
+  const requestedPage = Number.parseInt(first(params.page) ?? "", 10);
 
-export default async function CatalogPage() {
-  const products = await getProducts();
-  const parents = products.filter((p) => p.is_parent).length;
-  const conflicted = products.filter((p) => p.open_conflicts > 0).length;
+  // Two reads at most: the first resolves the total so the page can be clamped,
+  // and a second only happens when the URL points past the end of the data.
+  let products = await getProducts(context, {
+    limit,
+    offset: Number.isFinite(requestedPage) ? (requestedPage - 1) * limit : 0,
+  });
+  let window = pageWindow({ page: first(params.page), limit, total: products.data.total });
+  if (window.offset !== products.data.offset) {
+    products = await getProducts(context, { limit, offset: window.offset });
+    window = pageWindow({ page: first(params.page), limit, total: products.data.total });
+  }
+
+  const rows = products.data.products.filter((product) => {
+    if (status !== "" && product.status !== status) return false;
+    return matchesText([product.sku, product.title, product.brand, product.gtin, product.category_path], q);
+  });
+
+  const filters: Record<string, string | undefined> = {
+    q: q === "" ? undefined : q,
+    status: status === "" ? undefined : status,
+    page_size: String(limit),
+  };
 
   return (
-    <Shell
-      title="Catalog explorer"
-      subtitle={`${products.length.toLocaleString()} products in view · ${parents} families · ${conflicted} with open conflicts`}
-    >
-      {usingFixtures() ? (
-        <div className="notice">
-          Showing fixture data. Set <code>CATALOGGUARD_WORKSPACE_ID</code> and run the
-          backend to read a real workspace.
-        </div>
-      ) : null}
+    <Shell title="Catalog explorer" subtitle={`${plural(window.total, "canonical product")} in this workspace`}>
+      <DataSourceNotice source={products.source} reason={products.reason} />
 
-      <div className="toolbar">
-        <input className="input" placeholder="Filter by SKU, title, brand, GTIN…" aria-label="Filter products" />
-        <select className="input" aria-label="Status" defaultValue="all" style={{ maxWidth: 150 }}>
-          <option value="all">All statuses</option>
-          <option value="active">Active</option>
-          <option value="draft">Draft</option>
-          <option value="suppressed">Suppressed</option>
-        </select>
-        <select className="input" aria-label="Conflicts" defaultValue="any" style={{ maxWidth: 160 }}>
-          <option value="any">Any conflict count</option>
-          <option value="with">Has conflicts</option>
-          <option value="clean">Clean</option>
-        </select>
-        <span className="spacer" />
-        <button type="button" className="button">
-          Export CSV
-        </button>
-      </div>
+      <FilterBar
+        action="/catalog"
+        resultNote={
+          q === "" ? undefined : `“${q}” matched ${plural(rows.length, "row")} on this page — the API has no text filter.`
+        }
+      >
+        <TextFilter
+          name="q"
+          label="Search this page"
+          defaultValue={q}
+          placeholder="SKU, title, brand, GTIN"
+          hint="Loaded page only"
+        />
+        <SelectFilter
+          name="status"
+          label="Status"
+          defaultValue={status}
+          options={[
+            { value: "", label: "All statuses" },
+            { value: "active", label: "Active" },
+            { value: "draft", label: "Draft" },
+            { value: "suppressed", label: "Suppressed" },
+            { value: "archived", label: "Archived" },
+          ]}
+        />
+        <SelectFilter
+          name="page_size"
+          label="Rows"
+          defaultValue={String(limit)}
+          options={PAGE_SIZES.map((size) => ({ value: String(size), label: `${size} per page` }))}
+        />
+        <CarryFilters filters={filters} except={["q", "status", "page_size"]} />
+      </FilterBar>
 
-      <section className="card">
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>SKU</th>
-                <th>Title</th>
-                <th>Brand</th>
-                <th>Category</th>
-                <th>Status</th>
-                <th className="num">Price</th>
-                <th className="num">Children</th>
-                <th className="num">Channels</th>
-                <th>Attention</th>
-              </tr>
-            </thead>
-            <tbody>
-              {products.map((product) => (
-                <tr key={product.id}>
-                  <td className="mono" style={{ whiteSpace: "nowrap" }}>
-                    {product.sku}
-                  </td>
-                  <td>
-                    <div style={{ fontWeight: 550 }}>{product.title ?? "—"}</div>
-                    {product.is_parent ? (
-                      <div style={{ marginTop: 2 }}>
-                        <NeutralBadge>family</NeutralBadge>
-                      </div>
-                    ) : null}
-                  </td>
-                  <td>{product.brand ?? "—"}</td>
-                  <td style={{ color: "rgb(var(--text-muted))" }}>{product.category_path ?? "—"}</td>
-                  <td>
-                    <span className={`badge ${STATUS_BADGE[product.status]}`}>{product.status}</span>
-                  </td>
-                  <td className="num">
-                    {product.price === null ? "—" : formatMoney(product.price, product.currency)}
-                  </td>
-                  <td className="num">{product.child_count || "—"}</td>
-                  <td className="num">{product.channel_count || "—"}</td>
-                  <td>
-                    {product.open_conflicts === 0 ? (
-                      <NeutralBadge>clean</NeutralBadge>
-                    ) : (
-                      <RiskBadge level={urgency(product.open_conflicts)} score={product.open_conflicts} />
-                    )}
-                  </td>
+      {rows.length === 0 ? (
+        <EmptyState
+          title="Nothing on this page matches"
+          body={
+            q === "" && status === ""
+              ? "This workspace has no products on the loaded page."
+              : "The filters removed every row on this page. Clear them, or move to another page."
+          }
+        />
+      ) : (
+        <section className="card">
+          <div className="table-wrap">
+            <table>
+              <caption className="visually-hidden">Canonical products with identifiers, status and version</caption>
+              <thead>
+                <tr>
+                  <th>SKU</th>
+                  <th>Title</th>
+                  <th>Brand</th>
+                  <th>Category</th>
+                  <th>Status</th>
+                  <th>Version</th>
+                  <th>Attributes</th>
+                  <th>Reconciled</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+              </thead>
+              <tbody>
+                {rows.map((product) => (
+                  <tr key={product.id}>
+                    <td className="mono nowrap">{product.sku}</td>
+                    <td>
+                      <div style={{ fontWeight: 550 }}>{product.title ?? "—"}</div>
+                      {product.is_parent ? (
+                        <div style={{ marginTop: 2 }}>
+                          <NeutralBadge>family</NeutralBadge>
+                        </div>
+                      ) : null}
+                    </td>
+                    <td>{product.brand ?? "—"}</td>
+                    <td style={{ color: "rgb(var(--text-muted))" }}>{product.category_path ?? "—"}</td>
+                    <td>
+                      <span className={`badge badge-${STATUS_TONE[product.status] ?? "neutral"}`}>{product.status}</span>
+                    </td>
+                    <td className="num">v{product.version}</td>
+                    <td className="num">{Object.keys(product.attributes).length}</td>
+                    <td style={{ color: "rgb(var(--text-subtle))", whiteSpace: "nowrap" }}>
+                      {product.last_reconciled_at ? formatRelative(product.last_reconciled_at) : "never"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
-      <p style={{ color: "rgb(var(--text-subtle))", fontSize: 12, margin: 0 }}>
-        Showing {formatCompact(products.length)} of {formatCompact(12480)} products. Filters run
-        server-side once a workspace is connected.
+      <Pagination path="/catalog" filters={filters} window={window} noun="products" shown={rows.length} />
+      <p className="page-footnote">
+        Columns mirror what <code>GET /products</code> returns. That route carries no conflict count, price or
+        channel count, so this table does not invent them — the conflict view lives on the{" "}
+        <a href="/reconciliation">reconciliation page</a>. Both filters here apply to the loaded page only,
+        because the route accepts <code>limit</code> and <code>offset</code> and nothing else: a matching row on
+        another page will not be found until that page is loaded.
       </p>
     </Shell>
   );
+}
+
+function first(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
 }

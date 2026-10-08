@@ -1415,3 +1415,94 @@ the connector seam, so `execute_proposal` is the seam's first real caller and
 - **Storing the previous state only when rollback is supported.** Then a
   no-rollback marketplace could never be restored manually either, and §51's
   "the plan exists before the write" would be a phrase rather than a row.
+
+---
+
+## D-023 — Frontend Data Access: Forwarded Session, Stated Fallbacks, URL Filters
+
+**Status:** Implemented (Phase 21). Verified against a stub API in a browser; never against the real backend, which has no database (D-006).
+
+### Decision
+
+- **Reads happen in server components and forward the session.** `lib/api.ts`
+  reads `cookies()` from the incoming request and passes them to the backend.
+  The previous version called the API with an environment variable and no
+  cookie, so every tenant route answered 401 and the app could only ever show
+  fixtures.
+- **The workspace comes from the session, not the environment.**
+  `GET /auth/me` reports memberships; the first is used unless a `cg_workspace`
+  cookie names another one the caller actually belongs to. A stale cookie falls
+  back rather than 403-ing the console.
+- **Every read returns where its data came from.** `Loaded<T> = { data, source,
+  reason }` with reasons `offline | unreachable | forbidden | server-error |
+  disabled`, and the page prints the reason. "Not signed in" and "no data" look
+  identical in a table and mean opposite things.
+- **Writes happen in the browser through the same-origin `/api/*` rewrite**,
+  with `credentials: "include"`, the CSRF token from `GET /auth/csrf`, and the
+  header name that endpoint reports. Server components read; they do not
+  mutate. No CORS grant is load-bearing.
+- **Filters are GET forms over the query string.** No client store for table
+  state: a filtered view is a URL, works without JavaScript, and survives a
+  reload. Pagination reports rows shown versus rows on the page whenever a
+  client-side filter narrows them.
+- **No new npm dependencies.** Next 16, React 19 and TypeScript as D-001 chose
+  them; no Tailwind, no shadcn/ui, no TanStack Query/Table, no React Hook Form,
+  no Zod — §29's list was a proposal to confirm, not a mandate.
+
+### Context
+
+Phase 21's job was to reach §29–§30 with the routes Phases 7–20 had built. The
+backend exposes tenant-scoped list endpoints with `limit`/`offset` and
+`X-Workspace-Id`; the frontend had three pages reading fixtures, with approve
+buttons deliberately disabled and filters that were decoration.
+
+### Rationale
+
+- **A silent fallback is a lie with a table on top.** The fixture path is the
+  state an operator will meet most often while the backend is down, so it names
+  its own cause every time.
+- **A refused write must say why, not fail silently.** The write client surfaces
+  the backend's `detail` string, so "A CRITICAL proposal needs a second
+  approver" reaches the operator instead of a spinner that stops.
+- **URL state beats a store here.** With one data source — the query string —
+  the back button, a reload and a shared link all do the obvious thing, and the
+  filter bar still works with JavaScript disabled, which is the §61 floor.
+- **Contrast is a correctness property for the risk bands.** The band colours
+  doubled as badge text and measured 1.9:1–3.1:1 on their own tints, so
+  `--band-*` text tokens were introduced: same hues, readable lightness. A risk
+  band nobody can read is a risk band the console cannot communicate.
+
+### Trade-offs accepted
+
+- **The catalog's text and status filters are page-local.** `GET /products` has
+  no query parameters; the UI labels the limitation and the pagination status
+  line reports what is actually on screen.
+- **Three §30 pages are missing** (Product Detail, Marketplace Connections,
+  Agent Activity): no route serves a product, a connection or an agent run.
+  Their data appears as labelled fixtures or as an explicit "no route" card
+  rather than as invented pages.
+- **Verification used a stub API.** The real API needs Postgres and no database
+  has ever been reachable, so a throwaway stub answered the same routes to drive
+  the console in a browser. That proves the frontend's contract, not the
+  backend's behaviour.
+- **One HTTP client per direction** (`api.ts` server, `writeClient.ts` browser)
+  rather than one shared module: the two differ in credentials, headers and
+  cookie access, and merging them would mean importing `next/headers` into
+  client bundles.
+
+### Alternatives rejected
+
+- **TanStack Query for caching and mutations.** A second source of truth
+  beside the URL for filters, and a client cache that would show stale approval
+  state next to an audit row written a second earlier.
+- **Reading with the workspace in an environment variable.** It encodes one
+  workspace per deployment, which is a single-tenant console wearing a
+  multi-tenant schema.
+- **Calling the backend directly from the browser.** Needs the frontend origin
+  in the CORS allowlist and puts the session cookie on a second origin, which
+  means `SameSite=None` and two origins to keep in sync (D-014's revocation
+  guarantees rest on one origin holding the cookie).
+- **An empty state for every unreachable backend.** It tells an operator their
+  catalog is clean when nothing was read at all.
+- **Optimistic bulk decisions.** D-020 keeps a person in the loop; showing a
+  decided item before the server agrees would show a decision that was refused.
