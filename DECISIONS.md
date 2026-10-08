@@ -1607,3 +1607,117 @@ the marketplace deferral one.
 - **A dashboard-wide chat that preloads rows.** Sending the catalog into a prompt
   without a tool is §31's failure mode with extra steps: whatever the model
   recalls about rows it never asked for.
+
+---
+
+### Amendment (Phase 23, 2026-10-08)
+
+The fourth trade-off above had no code behind it: `bind_context` existed and
+nothing called it, and the four Langfuse settings had no reader. Phase 23 makes
+the interim state real rather than aspirational — bound request context on every
+log line, the Langfuse adapter written and env-gated behind `TraceSink`, and an
+in-app summary over rows the system already writes. The destination is still
+unset; what changed is that setting it is configuration rather than a build.
+
+---
+
+## D-025 — Observability: Correlate Everything, Account In-App, Trace Through a Port
+
+**Status:** Implemented (Phase 23). The Langfuse wire call is unverified — no instance has ever been reachable.
+
+### Decision
+
+- **Every request binds its own context.** `RequestContextMiddleware` puts
+  `request_id`, `method`, `path`, `status` and `duration_ms` on every log line,
+  returns the id as `X-Request-Id`, and clears the context afterwards.
+  `get_current_tenant` binds `workspace_id` and `user_id` at the first point
+  either is known. §55's field list was absent rather than incomplete: the
+  helper existed since Phase 8 and nothing called it.
+- **An inbound request id is honoured only when it is a short opaque token.**
+  Anything else is replaced, because a log line is not a place to echo a caller's
+  string unexamined.
+- **Traces go through a port with a null default.** `TraceSink` has two
+  implementations: `NullTraceSink` (counts, discards) and `LangfuseTraceSink`
+  (self-hosted, D-010's only destination), selected by configuration. No call
+  site branches on whether observability is enabled, and a deployment with no
+  configuration exports nothing.
+- **Events carry counts, durations, statuses and ids — never content.** Keys
+  shaped like content (`query`, `prompt`, `sku`, `arguments`, …) are masked at
+  the event boundary as well as in the log processor, so D-010's rule 3 holds one
+  layer above the log line it was written for.
+- **A failing sink never fails a request.** Emitting is wrapped, the transport is
+  bounded by `telemetry_timeout_seconds`, and plaintext to a remote host is
+  refused. An observability backend that can take down a product change is worse
+  than no backend.
+- **Accounting is in-app and read-only.** `GET /api/v1/observability/summary`
+  aggregates the rows the system already writes and is gated on `admin`. It has
+  no write sibling: an endpoint that could silence telemetry or change a sink
+  would be a way to make a system look healthy.
+- **A signal nobody emitted is `null`; only a real zero is `0`.** The response
+  carries `unavailable` in words and maps each of §32's requirements to the field
+  feeding it, so a reader can tell "none happened" from "we cannot see".
+
+### Context
+
+§32 lists nine signals to track, §55 lists nine fields for structured logs, §56
+asks for cost control, and D-010 decided where traces may go and that masking is
+mandatory. Phase 4 left four Langfuse settings in the config with no reader, and
+Phase 8 left a `bind_context` helper with no caller. Phases 17–20 then produced
+exactly the rows an observability summary needs — simulation runs, agent runs,
+tool calls, execution jobs — with nothing reading them.
+
+### Rationale
+
+- **Correlation before dashboards.** Two of §32's nine signals were unreachable
+  without a sink; the other seven were already in the database. Binding request
+  context and aggregating rows delivers most of the value with no external
+  dependency, which is what D-010's "structured logging carries observability
+  until Langfuse is stood up" anticipates.
+- **A port, because the destination does not exist yet.** Phase 28 owns the
+  deployment. Writing the adapter now means that phase configures something
+  rather than building it — and writing it as an adapter means the alternative
+  (instrumenting the code again at deployment time) is not on the table.
+- **Counts only, because a trace is not a data export.** A trace carrying product
+  text would move commercial data to a tracing backend under a masking rule that
+  was written for log lines. The adapter's `input`/`output` fields are counts by
+  construction, and the tests assert no credential and no content appears in a
+  payload.
+- **`admin`, not `read`, for the summary.** Token spend and failure rates are
+  workspace-wide operational data. D-003 separated credential custody from
+  approval authority for the same reason: some facts are about the system, not
+  about the catalog, and both belong with the ops manager.
+
+### Trade-offs accepted
+
+- **Retrieval quality and model usage report `null` until a sink is configured.**
+  They are traces, not rows. Writing them to a table would create an
+  observability schema that D-010's destination does not need.
+- **One log line per request**, which at volume is most of the log volume.
+  Correlation is worth the bytes; Phase 28 decides where they land.
+- **The summary is capped at 2,000 rows per section** and says so in
+  `unavailable` when it bites. No aggregation table exists.
+- **Tokens, not currency.** There is no price table, so the payload reports token
+  counts. D-010 traded away the vendor cost dashboard; this works around that
+  rather than solving it.
+- **No Prometheus endpoint, no dashboards, no alerts.** §32 asks what to track.
+  Charting and paging belong to the deployment phase, and an alert nobody has
+  agreed a threshold for is noise.
+
+### Alternatives rejected
+
+- **A `/metrics` Prometheus endpoint now.** It would need a cardinality policy, a
+  scrape target and a retention decision — all deployment questions — before it
+  could be right, and the summary endpoint already gives a dashboard something
+  stable to poll.
+- **Writing tool-call and LLM payloads to a table so every signal works today.**
+  That duplicates Langfuse's own storage in the transactional database, where
+  masked, low-value rows would have to be migrated, retained and eventually
+  deleted.
+- **Emitting traces by default to a local collector.** It would look like
+  observability working while silently buffering unbounded prompt-adjacent data
+  in a process that has no backpressure story.
+- **One log line per component call.** §55 asks for request-scoped fields, not
+  per-call tracing; the request line plus the component lines already correlate,
+  and the component lines are what a debugging session actually needs.
+- **Gating the summary on `read`.** Every role has `read`, including the
+  merchandiser whose view of the system should not include its failure rates.

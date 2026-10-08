@@ -547,7 +547,7 @@ question ──► bounded tool loop (Phase 14's client, llm_max_tool_rounds)
 
 ---
 
-## Observability and data residency (D-010)
+## Observability (D-010, D-025, Phase 23)
 
 Catalogs contain proprietary manufacturer files, wholesale margins, and
 marketplace listings. Telemetry must not leave our infrastructure.
@@ -557,6 +557,36 @@ marketplace listings. Telemetry must not leave our infrastructure.
   covers traces, errors, and exception payloads — not just log lines.
 - Token and cost accounting is built in-house, since there is no vendor
   dashboard.
+
+What Phase 23 added to that list, and what §55 asks for:
+
+```
+request ─► RequestContextMiddleware        binds request_id, method, path,
+           │                                status, duration_ms; returns
+           │                                X-Request-Id; clears afterwards
+           ├─► get_current_tenant           binds workspace_id, user_id
+           │
+           └─► components ─► logger.info    every line inherits the request
+
+observation ─► emit(kind, name, counts) ─► TraceSink
+                                             ├── NullTraceSink     (default)
+                                             └── LangfuseTraceSink (self-hosted)
+
+GET /api/v1/observability/summary  ──►  rows the system already wrote
+                                         (admin capability, read-only)
+```
+
+- **Correlation before dashboards.** Most of §32's value comes from two
+  absences being fixed: a `bind_context` helper nothing called, and four Langfuse
+  settings nothing read.
+- **A port, because the destination does not exist until Phase 28.** The adapter
+  is written; setting `LANGFUSE_*` is configuration, not a build.
+- **Counts, never content.** Events carry durations, statuses, ids and small
+  numeric attributes; content-shaped keys are masked at the event boundary too,
+  one layer above the log rule they were written for.
+- **A sink cannot fail a request**, and plaintext to a remote host is refused.
+- **`null` is not `0`.** Retrieval and model-usage signals report `null` until a
+  sink exists; `unavailable` names the gap in words.
 
 ---
 
@@ -674,3 +704,12 @@ marketplace listings. Telemetry must not leave our infrastructure.
   (D-024).
 - **Six of §23's eighteen tools exist**, so questions needing the other twelve
   get "I cannot see that" rather than an approximation.
+- **No trace has ever left the process.** The Langfuse adapter is written and
+  env-gated; no instance has been reachable and the deployment target arrives in
+  Phase 28, so two of §32's nine signals report `null` and D-010's interim clause
+  ("structured logging carries observability until Langfuse is stood up") is the
+  current state rather than a plan.
+- **The observability summary is capped at 2,000 rows per section** and says so
+  when it truncates. There is no aggregation table, no Prometheus endpoint, no
+  dashboard and no alerting — tracking is Phase 23's scope; charting and paging
+  belong to deployment.

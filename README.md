@@ -29,7 +29,7 @@ decision written to an immutable audit row (§20, §38, §39) — are complete a
 tested, as is the execution engine that carries an approved change to a
 marketplace, reads it back to prove it landed, and rolls it back when it did
 not (§21, §51), with a `tool_calls` record of every tool invocation (§23) —
-all of it **1009 backend tests** (1006 passed, 3 opt-in live-provider tests skipped)
+all of it **1071 backend tests** (1068 passed, 3 opt-in live-provider tests skipped)
 and a **79-test frontend suite**.
 The marketplace seam those writes go through exists too: one interface, one
 mock adapter, credentials encrypted at rest (§22, §33, D-005), with every live
@@ -56,6 +56,15 @@ approve or execute anything, every claim is checked against the tools that
 actually ran, and an answer it cannot cite is a 502 rather than a paragraph
 (D-024). It is an API only: no console panel, no streaming, and no model has
 ever answered, because the Qroq key is still awaiting rotation.
+
+Every log line is correlatable: each request binds a `request_id`, workspace and
+user, returns the id as `X-Request-Id`, and reports its own status and duration
+(§55). Observations go through a `TraceSink` port whose default adapter discards
+them and whose Langfuse adapter is self-hosted and env-gated, per D-010 — so a
+deployment with no configuration exports nothing. `GET
+/api/v1/observability/summary` aggregates the rows the system already writes:
+latency percentiles, token totals and repair rate, per-tool failures, retrieval
+signals and execution outcomes, naming in words anything it cannot see.
 
 A live LLM provider **has** now been called three times: two schema-validated
 answers, fast and reasoning tier, plus a real tool call that resolved source
@@ -110,6 +119,9 @@ Every phase's delivery, gates and gaps are recorded in
 | Console: dashboard, catalog explorer, approval center, reconciliation canvas, sandbox, compliance center | Implemented, 79 frontend tests; six screens driven in a browser (Chrome DevTools), Lighthouse accessibility 100 on three pages; **never run against the real backend** (D-006), and three §30 pages have no route to render |
 | Approval decisions from the UI: approve, edit, reject, re-analysis, bulk, approve-all-LOW | Implemented; verified in a browser against a stub API — CSRF token and `X-Workspace-Id` on every write, each decision removed its row from the queue |
 | Copilot: five read-only catalog tools, enforced citations, `use_copilot` gate (§31, D-024) | Implemented, 53 tests; **API only** — no console panel, no streaming, and no model has answered yet (Qroq key unrotated); rate limiting is per process |
+| Request-scoped log context: `request_id`, workspace, user, status, duration (§55) | Implemented, 20 tests |
+| Trace port with null + self-hosted Langfuse adapters; events carry counts, never content (D-010, D-025) | Implemented, 25 tests; **no trace has ever left the process** — no Langfuse instance reachable (Phase 28) |
+| `GET /observability/summary`: latency p50/p95, tokens, per-tool failures, retrieval signals, execution outcomes (D-007) | Implemented, 17 tests; gated on `admin`; retrieval and model-usage signals report `null` until a sink is configured |
 | Outbound mail transport | Not configured; messages queue to `email_outbox` (D-017) |
 
 Users cannot self-register: the first administrator is created by a CLI, and
@@ -187,7 +199,7 @@ Swagger UI at `http://localhost:3000/docs` when the frontend proxies, or
 ### Tests and lint
 
 ```bash
-python -m pytest -q                   # 1006 passed, 3 skipped, no database required
+python -m pytest -q                   # 1068 passed, 3 skipped, no database required
 cd frontend && npm test               # 79 vitest tests (pure modules, fixtures, write client)
 CATALOGGUARD_LIVE_LLM=1 python -m pytest tests/agent -q   # opt-in: 3 live LLM calls (2 schemas + 1 tool call)
 python -m ruff check app tests alembic scripts
