@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -21,7 +23,7 @@ from app.api.v1 import (
     observability,
     reconciliation,
 )
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.middleware import (
     CSRFMiddleware,
@@ -136,7 +138,75 @@ def create_app() -> FastAPI:
             ),
         }
 
+    _install_openapi_security(app, settings)
     return app
+
+
+# Everything else in this API needs the session cookie, and the spec now says so:
+# Phase 24's contract test found the served OpenAPI document declared no
+# authentication at all, so `/docs` described an API that looked anonymous.
+def _public_operations(prefix: str) -> frozenset[tuple[str, str]]:
+    """Routes a client calls before it has a session."""
+
+    return frozenset(
+        {
+            ("get", "/health"),
+            ("get", "/ready"),
+            ("get", "/openapi.json"),
+            ("get", "/docs"),
+            ("get", f"{prefix}/brand/manifest"),
+            ("post", f"{prefix}/auth/login"),
+            ("get", f"{prefix}/auth/csrf"),
+            ("post", f"{prefix}/auth/password-reset"),
+            ("post", f"{prefix}/auth/password-reset/confirm"),
+            ("post", f"{prefix}/auth/invitations/accept"),
+        }
+    )
+
+
+HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
+
+
+def _install_openapi_security(app: FastAPI, settings: Settings) -> None:
+    """Declare the session cookie as the API's security scheme.
+
+    Authentication is a session cookie read by a dependency, which FastAPI
+    cannot infer. Without this the generated spec lists forty operations and
+    says none of them need a credential — the reverse of the truth, and the kind
+    of error a reader of `/docs` acts on.
+    """
+    def openapi() -> dict[str, Any]:
+        if app.openapi_schema:
+            return app.openapi_schema
+
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+        )
+        schema.setdefault("components", {})["securitySchemes"] = {
+            "sessionCookie": {
+                "type": "apiKey",
+                "in": "cookie",
+                "name": settings.session_cookie_name,
+                "description": (
+                    "Issued by `POST /api/v1/auth/login`. Mutations also require "
+                    "the `X-CSRF-Token` header matching the `"
+                    f"{settings.csrf_cookie_name}` cookie."
+                ),
+            }
+        }
+        public = _public_operations(settings.api_prefix)
+        for path, item in schema.get("paths", {}).items():
+            for method, operation in item.items():
+                if method in HTTP_METHODS and (method, path) not in public:
+                    operation["security"] = [{"sessionCookie": []}]
+
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = openapi  # type: ignore[method-assign]
 
 
 app = create_app()

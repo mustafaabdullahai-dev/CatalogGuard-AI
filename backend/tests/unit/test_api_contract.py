@@ -28,20 +28,51 @@ import pytest
 from app.main import app
 
 PREFIX = "/api/v1"
-# Paths that legitimately have no workspace: they are how a client obtains a
-# session in the first place. `/health` and `/ready` are infrastructure probes,
-# called by a load balancer rather than a tenant client.
-PUBLIC_PREFIXES = tuple(f"{PREFIX}{suffix}" for suffix in (
-    "/auth/login",
-    "/auth/logout",
-    "/auth/me",
-    "/auth/csrf",
-    "/auth/password",
-    "/auth/password-reset",
-    "/auth/invitations/accept",
-    "/health",
-    "/ready",
-))
+
+# Two different exemptions, and conflating them is how a route ends up
+# accidentally unguarded. `/auth/logout` needs no *workspace* — it revokes the
+# session that named the workspaces — but it absolutely needs a session, so it
+# must not appear in the second list.
+#
+# `/health` and `/ready` are infrastructure probes, called by a load balancer
+# rather than a tenant client, and belong to both.
+PROBES = ("/health", "/ready")
+
+# No `X-Workspace-Id`: the session is what is missing, or what is being asked
+# about, rather than the workspace.
+NO_WORKSPACE_PREFIXES = tuple(
+    f"{PREFIX}{suffix}"
+    for suffix in (
+        "/auth/login",
+        "/auth/logout",
+        "/auth/me",
+        "/auth/csrf",
+        "/auth/password",
+        "/auth/password-reset",
+        "/auth/invitations/accept",
+    )
+)
+
+# No session at all: the routes a client calls *to obtain* one.
+NO_SESSION_PREFIXES = tuple(
+    f"{PREFIX}{suffix}"
+    for suffix in (
+        "/auth/login",
+        "/auth/csrf",
+        "/auth/password-reset",
+        "/auth/invitations/accept",
+    )
+)
+
+
+def _needs_no_workspace(path: str) -> bool:
+    """No `X-Workspace-Id` required — distinct from needing no session."""
+
+    return path in PROBES or path.startswith(NO_WORKSPACE_PREFIXES)
+
+
+def _needs_no_session(path: str) -> bool:
+    return path in PROBES or path.startswith(NO_SESSION_PREFIXES)
 
 
 @pytest.fixture(scope="module")
@@ -64,10 +95,6 @@ def _parameters(operation: dict[str, Any]) -> list[dict[str, Any]]:
         for parameter in operation.get("parameters", [])
         if parameter.get("in") == "header"
     ]
-
-
-def _is_public(path: str) -> bool:
-    return path in ("/health", "/ready") or path.startswith(PUBLIC_PREFIXES)
 
 
 class TestEveryOperationIsDocumented:
@@ -100,13 +127,61 @@ class TestEveryOperationIsDocumented:
             for path, method, operation in _operations(spec)
             # Probes are exempt: a load balancer asks whether the process is up,
             # and an error schema for that is decoration.
-            if path not in ("/health", "/ready")
+            if path not in PROBES
             and not any(
                 code.startswith(("4", "5")) for code in operation.get("responses", {})
             )
         ]
 
         assert not undocumented, f"no documented failure mode: {undocumented}"
+
+    def test_every_operation_declares_authentication(self, spec: dict[str, Any]) -> None:
+        """§42 lists authentication beside the schemas; a route that needs a
+        session has to say so in the spec, not only in the dependency.
+
+        Checked in both directions. A tenant route that omits `security` reads
+        as anonymous to anyone generating a client from `/docs`; a public route
+        that declares one is worse, because the credential it asks for is the
+        thing the caller is trying to obtain.
+        """
+
+        unguarded = [
+            f"{method.upper()} {path}"
+            for path, method, operation in _operations(spec)
+            if not _needs_no_session(path) and "security" not in operation
+        ]
+        overguarded = [
+            f"{method.upper()} {path}"
+            for path, method, operation in _operations(spec)
+            if _needs_no_session(path) and operation.get("security")
+        ]
+
+        assert not unguarded, f"tenant routes with no declared security: {unguarded}"
+        assert not overguarded, f"public routes demanding a credential: {overguarded}"
+
+    def test_the_security_scheme_is_the_session_cookie(
+        self, spec: dict[str, Any]
+    ) -> None:
+        from app.core.config import get_settings
+
+        settings = get_settings()
+        scheme = spec["components"]["securitySchemes"]["sessionCookie"]
+
+        assert scheme["type"] == "apiKey"
+        assert scheme["in"] == "cookie"
+        assert scheme["name"] == settings.session_cookie_name
+
+    def test_a_guarded_route_requires_exactly_the_session_scheme(
+        self, spec: dict[str, Any]
+    ) -> None:
+        guarded = [
+            operation["security"]
+            for path, _method, operation in _operations(spec)
+            if not _needs_no_session(path)
+        ]
+
+        assert guarded, "expected guarded routes to exist"
+        assert all(requirement == [{"sessionCookie": []}] for requirement in guarded)
 
 
 class TestEveryOperationHasSchemas:
@@ -122,6 +197,23 @@ class TestEveryOperationHasSchemas:
         ]
 
         assert not without_schema, f"success responses with no schema: {without_schema}"
+
+    def test_every_body_declares_a_request_schema(self, spec: dict[str, Any]) -> None:
+        """§42's request schema, checked per declared media type.
+
+        A file upload is `multipart/form-data` and cannot carry a JSON schema;
+        what it must carry is *some* described body, or a client has no idea
+        what to send.
+        """
+
+        without_schema = [
+            f"{method.upper()} {path}"
+            for path, method, operation in _operations(spec)
+            if "requestBody" in operation
+            and not operation["requestBody"].get("content")
+        ]
+
+        assert not without_schema, f"bodies with no media type: {without_schema}"
 
     def test_every_error_response_declares_a_schema(self, spec: dict[str, Any]) -> None:
         """The error models are the app's own: `{"detail": "..."}`."""
@@ -141,7 +233,7 @@ class TestTenantHeaderIsDeclared:
         missing = [
             f"{method.upper()} {path}"
             for path, method, operation in _operations(spec)
-            if not _is_public(path)
+            if not _needs_no_workspace(path)
             and not any(
                 parameter.get("name") == "X-Workspace-Id"
                 for parameter in _parameters(operation)
@@ -156,7 +248,7 @@ class TestTenantHeaderIsDeclared:
         asking = [
             f"{method.upper()} {path}"
             for path, method, operation in _operations(spec)
-            if _is_public(path)
+            if _needs_no_workspace(path)
             and any(
                 parameter.get("name") == "X-Workspace-Id" for parameter in _parameters(operation)
             )
