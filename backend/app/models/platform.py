@@ -154,10 +154,24 @@ class ComplianceChunk(SoftDeletableTenantEntity):
         # generated migration -- leaving hybrid retrieval correct but running as
         # a sequential scan over every chunk in the workspace.
         Index("ix_chunks_search_vector", "search_vector", postgresql_using="gin"),
+        # `vector_cosine_ops` is explicit because pgvector 0.8 (what
+        # `pgvector/pgvector:pg16` ships, and what a managed Postgres tends to
+        # ship) no longer provides a default operator class for `hnsw`: the
+        # migration failed with "data type vector has no default operator class
+        # for access method hnsw" the first time Phase 24 ran it against a real
+        # database. Cosine is the distance the vector pass actually queries
+        # (`ComplianceChunk.embedding.cosine_distance`), so naming the operator
+        # class states that rather than leaving it to a default that no longer
+        # exists.
         Index(
             "ix_chunks_embedding_hnsw",
             "embedding",
             postgresql_using="hnsw",
+            # The mapping form, not a bare string: SQLAlchemy's PostgreSQL
+            # dialect emits the operator class only from `{column: opclass}`,
+            # and silently drops a string `postgresql_ops` — which is how the
+            # HNSW index reached Postgres with no operator class at all.
+            postgresql_ops={"embedding": "vector_cosine_ops"},
             postgresql_with={"m": 16, "ef_construction": 64},
         ),
         {"comment": "Retrievable chunk; semantic plus keyword plus metadata"},

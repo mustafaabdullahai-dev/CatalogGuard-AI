@@ -100,9 +100,13 @@ class TestRlsIsActuallyForced:
         application connects as the owner. Without FORCE every policy would be
         inert in production while still present in the schema.
         """
-        sql = enable_rls_sql("products")
-        assert "ENABLE ROW LEVEL SECURITY" in sql
-        assert "FORCE ROW LEVEL SECURITY" in sql
+        enable, force = enable_rls_sql("products")
+        # Two statements, not one joined by a semicolon: asyncpg refuses
+        # multi-command prepared statements, and the joined form meant RLS was
+        # never enabled on a real database.
+        assert enable == "ALTER TABLE products ENABLE ROW LEVEL SECURITY"
+        assert force == "ALTER TABLE products FORCE ROW LEVEL SECURITY"
+        assert ";" not in enable and ";" not in force
 
     def test_drop_is_idempotent(self) -> None:
         assert drop_policy_sql("products") == (

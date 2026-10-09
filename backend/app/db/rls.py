@@ -108,16 +108,24 @@ def create_policy_sql(table_name: str) -> str:
     )
 
 
-def enable_rls_sql(table_name: str) -> str:
-    """Enable and *force* RLS for one table.
+def enable_rls_sql(table_name: str) -> tuple[str, str]:
+    """Enable and *force* RLS for one table — two statements, deliberately.
 
     `FORCE` is not redundant. Postgres exempts a table's owner from its own
     policies, and the application connects as the owner of these tables, so
     without `FORCE` every policy would be inert in practice.
+
+    Two statements rather than one string joined by a semicolon: asyncpg
+    executes through a prepared statement and refuses "cannot insert multiple
+    commands into a prepared statement". The joined form was what shipped, so
+    the migration failed on the first real database (Phase 24) and **RLS had
+    never been enabled anywhere** — the tenant boundary D-011 rests on was
+    inert, leaving repository scoping as the only thing between one workspace's
+    rows and another's. Each statement must be executed on its own.
     """
     return (
-        f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY; "
-        f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY;"
+        f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY",
+        f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY",
     )
 
 

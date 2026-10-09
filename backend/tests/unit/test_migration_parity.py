@@ -279,7 +279,11 @@ class TestRowLevelSecurity:
         self, migration_source: str
     ) -> None:
         assert "_enable_rls()" in migration_source
-        assert "op.execute(enable_rls_sql(table.name))" in migration_source
+        # Each statement executed on its own: asyncpg refuses a multi-command
+        # prepared statement, and the joined form silently disabled RLS
+        # everywhere (Phase 24, against a real database).
+        assert "for statement in enable_rls_sql(table.name):" in migration_source
+        assert "op.execute(statement)" in migration_source
         assert "op.execute(create_policy_sql(table.name))" in migration_source
 
     def test_policy_is_created_for_every_tenant_table(

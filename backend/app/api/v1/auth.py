@@ -12,7 +12,7 @@ body, or timing — is information an attacker can use to enumerate accounts.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
@@ -38,12 +38,33 @@ from app.schemas.auth import (
     SessionUser,
     WorkspaceRef,
 )
+from app.schemas.common import ErrorResponse
 from app.services.auth import login as login_service
 from app.services.auth import password_reset as reset_service
 from app.services.auth import sessions as session_service
 
 router = APIRouter(tags=["auth"])
 logger = get_logger(__name__)
+
+# Documented failures (§42). FastAPI only describes what a route declares, and
+# Phase 24's contract test found three session routes that described success and
+# nothing else — a client calling `/auth/me` had no documented way to learn that
+# it was unauthenticated.
+_UNAUTHENTICATED: dict[int | str, dict[str, Any]] = {
+    401: {
+        "model": ErrorResponse,
+        "description": "No session, or the session is expired or revoked",
+    },
+}
+_UNPROCESSABLE: dict[int | str, dict[str, Any]] = {
+    422: {"model": ErrorResponse, "description": "The request failed schema validation"},
+}
+_SESSION_ERRORS: dict[int | str, dict[str, Any]] = {
+    **_UNAUTHENTICATED,
+    403: {"model": ErrorResponse, "description": "The session is valid but lacks the capability"},
+}
+
+
 
 
 def _client_ip(request: Request) -> str | None:
@@ -177,7 +198,11 @@ async def login(
     )
 
 
-@router.post("/auth/logout", summary="Revoke the current session")
+@router.post(
+    "/auth/logout",
+    summary="Revoke the current session",
+    responses=_SESSION_ERRORS,
+)
 async def logout(
     response: Response,
     context: Annotated[AuthContext, Depends(get_auth_context)],
@@ -207,6 +232,7 @@ async def logout(
     "/auth/me",
     response_model=CurrentSessionResponse,
     summary="The current session's identity and workspaces",
+    responses=_UNAUTHENTICATED,
 )
 async def me(
     context: Annotated[AuthContext, Depends(get_auth_context)],
@@ -265,6 +291,7 @@ async def change_password(
     "/auth/csrf",
     response_model=CsrfTokenResponse,
     summary="Obtain a CSRF token",
+    responses={503: {"model": ErrorResponse, "description": "CSRF is not configured"}},
 )
 async def csrf(request: Request, response: Response) -> CsrfTokenResponse:
     """Hand out a CSRF token and the cookie that must accompany it.

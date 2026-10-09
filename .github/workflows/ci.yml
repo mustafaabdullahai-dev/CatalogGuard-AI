@@ -1,0 +1,119 @@
+name: CI
+
+# §40's four test kinds, and the gates that keep them honest. Until this
+# workflow existed, "the suite is green" was something only one machine could
+# say; the gates below run on every push and on every pull request, which is
+# the difference between a claim and a check.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+
+jobs:
+  backend:
+    name: Backend — unit, agent, integration
+    runs-on: ubuntu-latest
+    # Phase 24's integration suite starts its own pgvector container when
+    # CATALOGGUARD_TEST_DATABASE_URL is unset, but a service container is
+    # faster and its lifecycle is the runner's problem rather than the suite's.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: catalogguard
+          POSTGRES_DB: catalogguard_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check app tests alembic scripts
+
+      - name: Types
+        run: mypy app
+
+      - name: Unit and agent suites
+        # No DATABASE_URL: the unit suite must pass with no database at all,
+        # which is the property that keeps it fast enough to run on every push.
+        run: pytest -m "not integration" tests/unit tests/agent
+
+      - name: Integration suite (real Postgres)
+        env:
+          # Loopback plus ssl=disable: `alembic/env.py` requires TLS for an
+          # online migration except on an explicit loopback escape, and the CI
+          # database is ten milliseconds away over the runner's loopback.
+          CATALOGGUARD_TEST_DATABASE_URL: postgresql+asyncpg://postgres:catalogguard@127.0.0.1:5432/catalogguard_test?ssl=disable
+          DATABASE_URL: postgresql://postgres:catalogguard@127.0.0.1:5432/catalogguard_test?sslmode=disable
+        run: pytest -m integration tests/integration
+
+      - name: Migration parity
+        run: |
+          # The generated migration must match the ORM, or the integration run
+          # above is testing a schema nobody deploys.
+          python -m scripts.generate_initial_migration
+          git diff --exit-code -- alembic/versions
+
+      - name: Coverage
+        run: pytest --cov=app --cov-report=term-missing:skip-covered -m "not integration and not live_llm" tests
+
+  frontend:
+    name: Frontend — vitest, eslint, tsc, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Tests
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Types
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build

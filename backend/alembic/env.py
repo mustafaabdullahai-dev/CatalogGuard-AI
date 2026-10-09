@@ -26,6 +26,11 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def _is_loopback(url: str) -> bool:
+    host = url.split("://", 1)[-1].split("/", 1)[0].rsplit("@", 1)[-1].split(":")[0]
+    return host in ("127.0.0.1", "localhost", "::1", "[::1]")
+
+
 def get_url() -> str:
     """Connection string with the async driver.
 
@@ -63,7 +68,17 @@ def get_url() -> str:
 
     # Online migrations actually connect, so TLS is mandatory. Enforced here
     # rather than trusting validation that may have been skipped above.
-    if "sslmode=" not in url:
+    #
+    # One explicit exception, for the integration suite (Phase 24): an ephemeral
+    # Postgres on loopback, where no byte leaves the host and asyncpg only
+    # accepts `ssl=` rather than `sslmode=`. It requires both the `-x
+    # allow_insecure=true` flag and a loopback host, so the rule still fails
+    # closed for any URL a deployment could actually use.
+    insecure_allowed = (
+        context.get_x_argument(as_dictionary=True).get("allow_insecure") == "true"
+        and _is_loopback(url)
+    )
+    if "sslmode=" not in url and not insecure_allowed:
         raise RuntimeError(
             "DATABASE_URL must set sslmode=require for an online migration."
         )

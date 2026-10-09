@@ -651,6 +651,7 @@ def upgrade() -> None:
         ["embedding"],
         postgresql_using="hnsw",
         postgresql_with={"ef_construction": 64, "m": 16},
+        postgresql_ops={"embedding": "vector_cosine_ops"},
     )
     op.create_index(
         "ix_chunks_search_vector", "compliance_chunks", ["search_vector"], postgresql_using="gin"
@@ -1861,7 +1862,8 @@ def _enable_rls() -> None:
     for table in Base.metadata.sorted_tables:
         if table.name in GLOBAL_TABLES or "workspace_id" not in table.c:
             continue
-        op.execute(enable_rls_sql(table.name))
+        for statement in enable_rls_sql(table.name):
+            op.execute(statement)
         op.execute(create_policy_sql(table.name))
 
 

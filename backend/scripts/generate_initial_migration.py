@@ -260,10 +260,24 @@ def _index_calls(table: Table) -> Iterator[str]:
             args += f", postgresql_with={{{rendered}}}"
         ops = pg.get("ops")
         if ops:
-            rendered = ", ".join(
-                f"{key!r}: {value!r}" for key, value in sorted(ops.items())
-            )
-            args += f", postgresql_ops={{{rendered}}}"
+            # A single-column index declares its operator class as a string; a
+            # multi-column one as a `{column: opclass}` mapping. Emitting the
+            # mapping form for one column produces `postgresql_ops={'embedding':
+            # 'vector_cosine_ops'}`, which SQLAlchemy reads as a per-column
+            # mapping with no key for the index's only column — so the operator
+            # class silently disappears from the generated migration.
+            if isinstance(ops, str):
+                raise ValueError(
+                    f"index {index.name!r} declares postgresql_ops as a string; "
+                    "SQLAlchemy's PostgreSQL dialect ignores it and emits no "
+                    "operator class. Use the mapping form, e.g. "
+                    "{'embedding': 'vector_cosine_ops'}."
+                )
+            else:
+                rendered = ", ".join(
+                    f"{key!r}: {value!r}" for key, value in sorted(ops.items())
+                )
+                args += f", postgresql_ops={{{rendered}}}"
         include = pg.get("include")
         if include:
             rendered = ", ".join(repr(column) for column in include)
@@ -417,7 +431,8 @@ def _rls_functions_lines() -> list[str]:
         "    for table in Base.metadata.sorted_tables:",
         "        if table.name in GLOBAL_TABLES or 'workspace_id' not in table.c:",
         "            continue",
-        "        op.execute(enable_rls_sql(table.name))",
+        "        for statement in enable_rls_sql(table.name):",
+        "            op.execute(statement)",
         "        op.execute(create_policy_sql(table.name))",
     ]
 
