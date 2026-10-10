@@ -131,7 +131,7 @@ refuses to exist without one. Tenant and soft-delete predicates are applied
 centrally, and `workspace_id` is stripped from update payloads so a caller
 cannot move a row between tenants.
 
-**3. Database.** Row-level security, `FORCE`d, on all 25 tenant tables:
+**3. Database.** Row-level security, `FORCE`d, on all 26 tenant tables:
 
 ```sql
 CREATE POLICY tenant_isolation ON products FOR ALL
@@ -154,6 +154,22 @@ The application binds a tenant per transaction with
 `SET LOCAL`, which discards the value at commit or rollback — required under a
 transaction-mode pooler, where a plain `SET` would survive on the backend
 connection and leak into the next request.
+
+**One table is deliberately wider than the rest** (D-011, amended in Phase 24):
+
+```sql
+-- workspace_memberships only
+USING      (user_id = current_user OR workspace_id = current_workspace)
+WITH CHECK (workspace_id = current_workspace)
+```
+
+Session resolution has to read a user's memberships to learn which workspaces
+they belong to, so nothing can bind a workspace before that read. Without this
+exception the policy returned nothing, and every signed-in user resolved to
+zero workspaces. The widened predicate is on the read side only, and the user
+id it compares against is bound by `get_auth_context` from the session it has
+already verified — never from a request. `WITH CHECK` is unchanged, so
+self-read cannot become self-enrolment.
 
 `organizations`, `users`, and `workspaces` carry no policy: they sit at or above
 the boundary, and a policy keyed on a workspace's own `workspace_id` would be
@@ -590,13 +606,44 @@ GET /api/v1/observability/summary  ──►  rows the system already wrote
 
 ---
 
+## Testing (D-026, Phase 24)
+
+```
+tests/unit          no database, fast, the default shape of the codebase
+tests/agent         graph, tools, injection, incomplete data, hallucinations
+tests/integration   real pgvector 0.8.6 in a container, or a URL you supply
+tests/e2e           empty — Phase 25
+```
+
+- **A real engine, not a described one.** The integration suite starts
+  `pgvector/pgvector:pg16`, migrates it, and runs as a `NOSUPERUSER` role so
+  RLS is enforced rather than bypassed. `CATALOGGUARD_TEST_DATABASE_URL` swaps
+  the managed container for one the environment provides, which is how CI runs.
+- **The contract is the served document.** 15 tests assert `app.openapi()`:
+  every route under the prefix, schemas on responses, a documented failure, the
+  tenant header, and authentication declared as the session cookie. FastAPI
+  cannot infer a session cookie read by a dependency, so the spec says it
+  explicitly.
+- **It found three things no unit test could.** An HNSW index missing its
+  operator class (migration never ran), RLS never enabled anywhere
+  (`enable_rls_sql` joined two statements with a semicolon), and a login flow
+  where every user resolved to zero workspaces (`workspace_memberships` is
+  tenant-scoped, but reading it is what names the workspace). All three are
+  facts about strings reaching a parser and policies meeting queries — exactly
+  what a mock cannot show.
+- **CI runs the gates on every push**, including a parity check that regenerates
+  the migration and fails if it differs.
+
+---
+
 ## Known limitations
 
-- **Untested against a live database.** The schema, migration, and RLS are
-  rendered to SQL in both directions and asserted against the ORM, but no
-  authenticated connection has exercised them. RLS behaviour in particular
-  (policy denial, `FORCE` under the owning role) needs a real Neon session to
-  confirm.
+- **Untested against the hosted database.** Phase 24 ran everything above
+  against an ephemeral `pgvector/pgvector:pg16` container: the migration, RLS,
+  auth, ingestion and retrieval are all verified against a real PostgreSQL
+  16.15 with pgvector 0.8.6. What that does *not* prove is that Neon exposes
+  pgvector, accepts these settings, or behaves the same under its pooled
+  endpoint. That needs a live authenticated session.
 - **No RLS bypass role.** Cross-tenant migration and admin tooling must bind a
   tenant explicitly today. A separately privileged role is a deliberate future
   decision, not an oversight.

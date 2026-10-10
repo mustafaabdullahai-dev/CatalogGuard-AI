@@ -2,13 +2,13 @@
 
 One document per phase in the §64 development process, plus an index here.
 
-**How these documents were written.** Phases 0–23 are complete; each page
+**How these documents were written.** Phases 0–24 are complete; each page
 records what that phase actually delivered, where the code lives, how it was
 verified, and what remains unverified. The pages for phases 0–13 were written
 retroactively on 2026-10-06 from the artifacts that survive — `DECISIONS.md`,
 the commits, the test suite and `docs/ARCHITECTURE.md` — because no
 contemporaneous phase log was kept; nothing on those pages is claimed beyond
-what those artifacts show. Phases 14 to 23 were written as they were built.
+what those artifacts show. Phases 14 to 24 were written as they were built.
 The phase-21 page replaces a retroactive stub written on 2026-10-06. The remaining pages carry the §64 scope, the master-prompt
 sections that will drive them, and a status row above that says how far any of
 it has actually got — no page claims delivery it did not verify.
@@ -45,7 +45,7 @@ one to trust. D-018 onward already use §64 numbers.
 | [21](phase-21-frontend.md) | Frontend | Complete (routes that exist) | D-001, D-023 |
 | [22](phase-22-ai-copilot.md) | AI Copilot | Complete (API only) | D-024, D-005 amended |
 | [23](phase-23-observability.md) | Observability | Complete (wire call unverified) | D-010 implemented, D-025 |
-| [24](phase-24-testing.md) | Testing | In progress | — |
+| [24](phase-24-testing.md) | Testing | Complete (E2E/security/performance are 25–27) | D-026, D-006 amended, D-011 amended |
 | [25](phase-25-browser-devtools-validation.md) | Browser DevTools validation | Not started | — |
 | [26](phase-26-security-testing.md) | Security testing | Not started | — |
 | [27](phase-27-performance-testing.md) | Performance testing | Not started | — |
@@ -54,10 +54,13 @@ one to trust. D-018 onward already use §64 numbers.
 
 ## Phases to commits
 
-The backend suite is **1071 tests**: 1025 in `backend/tests/unit` and 46 in
-`backend/tests/agent` — 43 offline and 3 live-provider tests that run only when
-`CATALOGGUARD_LIVE_LLM=1` is set. `integration` and `e2e` exist as directories
-and are empty. A default run reports **1068 passed, 3 skipped**.
+The backend suite is **1144 tests**: 1040 in `backend/tests/unit`, 62 in
+`backend/tests/agent` — 59 offline and 3 live-provider tests that run only when
+`CATALOGGUARD_LIVE_LLM=1` is set — and 42 in `backend/tests/integration`, which
+run against a real PostgreSQL 16.15 with pgvector (Phase 24, D-026).
+`backend/tests/e2e` is still empty: that is Phase 25. A default run reports
+**1141 passed, 3 skipped** and starts a container; `pytest -m "not integration"`
+reports **1099 passed** with no database at all.
 
 The frontend has its own suite: **79 vitest tests** in `frontend/tests`, over
 the pure modules (pagination, provenance, the diff parser, the notices), the
@@ -91,6 +94,7 @@ CSRF and workspace headers. `npm run lint`, `npm run typecheck` and
 | 21 — console wired to the API, canvas, sandbox, compliance, accessibility | `870fcf3` |
 | 22 — copilot: five read-only tools, enforced citations, `use_copilot` gate | `fcebf90` |
 | 23 — bound request context, trace port, in-app observability summary | `a0aca91` |
+| 24 — real-Postgres integration suite, OpenAPI contract, agent failure modes, CI | `3fc8143` |
 
 ## Work that §64 has no phase of its own for
 
@@ -109,8 +113,9 @@ in `DECISIONS.md` under their own numbers:
 
 ## Conventions in these pages
 
-- **Verified** means a test asserts it offline. **Unverified** means the code
-  exists and no test can prove it without infrastructure — a live database, a
-  live queue, a live model.
+- **Verified** means a test asserts it. **Unverified** means the code exists
+  and no test can prove it without infrastructure the repository does not have —
+  a hosted database, a live queue, a live model. Since Phase 24 the bar moved:
+  "needs a database" is no longer an excuse, because the suite starts one.
 - Every claim of "not verified" is deliberate (§67). If a page says nothing
-  about verification, assume nothing was run beyond the unit suite.
+  about verification, assume the suite said nothing either.

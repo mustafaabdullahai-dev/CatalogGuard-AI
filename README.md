@@ -29,8 +29,9 @@ decision written to an immutable audit row (§20, §38, §39) — are complete a
 tested, as is the execution engine that carries an approved change to a
 marketplace, reads it back to prove it landed, and rolls it back when it did
 not (§21, §51), with a `tool_calls` record of every tool invocation (§23) —
-all of it **1071 backend tests** (1068 passed, 3 opt-in live-provider tests skipped)
-and a **79-test frontend suite**.
+all of it **1144 backend tests** (1141 passed, 3 opt-in live-provider tests
+skipped) — **42 of them against a real PostgreSQL 16.15 with pgvector 0.8.6**
+(D-026) — and a **79-test frontend suite**.
 The marketplace seam those writes go through exists too: one interface, one
 mock adapter, credentials encrypted at rest (§22, §33, D-005), with every live
 integration still deferred.
@@ -79,7 +80,7 @@ Every phase's delivery, gates and gaps are recorded in
 | Settings, logging, edge masking | Implemented, unit tested |
 | FastAPI app shell, `/health`, `/ready`, OpenAPI | Unit tested in-process |
 | ORM: 33 tables across tenancy, catalog, reconciliation, platform, compliance | Implemented, unit tested |
-| Email/password sign-in, Argon2id, server-side sessions (D-014) | Implemented, unit tested |
+| Email/password sign-in, Argon2id, server-side sessions (D-014) | Implemented; **verified against a real database** (Phase 24) — token stored as a digest, revocation is a row, replay refused |
 | Password reset: single-use tokens, session revocation, outbox delivery (D-017) | Implemented, unit tested |
 | Workspace invitations: role bound at issue, admin-gated (D-017) | Implemented, unit tested |
 | Catalog normalization with an auditable alias table (D-015) | Implemented, unit tested |
@@ -88,7 +89,7 @@ Every phase's delivery, gates and gaps are recorded in
 | Source authority with per-field overrides; ties escalate (D-015) | Implemented, unit tested |
 | Conflict detection with available values, evidence and impact (§11) | Implemented, unit tested |
 | Deterministic risk scoring: 22 weights, four bands, five floors, §16 conformance audited (D-016) | Implemented, unit tested |
-| Catalog ingestion: validation, CSV/JSON/Excel parsing, schema detection, raw storage (D-018) | Implemented, 44 tests |
+| Catalog ingestion: validation, CSV/JSON/Excel parsing, schema detection, raw storage (D-018) | Implemented, 44 unit + **4 real-database tests** (multipart upload, 415 on an unsupported file, raw data preserved, cross-tenant 404) |
 | Ingestion sync/async seam (Dramatiq worker) | Implemented; **unverified** — no live Redis |
 | Canonical product model: raw records → products, identifiers, v1 versions (D-019) | Implemented, 12 tests |
 | Catalog anchor (auto Default catalog per workspace) | Implemented, unit tested |
@@ -101,15 +102,19 @@ Every phase's delivery, gates and gaps are recorded in
 | Marketplace seam: `MarketplaceConnector`, mock adapter, encrypted credentials (§22, §33, D-005) | Implemented, 32 tests; **no live adapter** — Shopify/Amazon/TikTok deferred |
 | Execution engine: pre-checks, verify-by-reread, bounded attempts, rollback (§21, §51, D-022) | Implemented, 15 tests; **no route or worker calls it**, and only `update_product` is reachable |
 | Compliance corpus: section-aware chunking, content-hash dedup (D-021) | Implemented, 52 tests |
-| Hybrid retrieval: GIN keyword `ts_rank` + pgvector cosine, deterministic rerank | Implemented, unit tested |
+| Hybrid retrieval: GIN keyword `ts_rank` + pgvector cosine, deterministic rerank | Implemented; **verified against real vectors** (Phase 24) — ordering, SQL filters, citations, tenant isolation |
 | Compliance API: ingest / list / search with per-hit citations and a signal note | Implemented, 12 tests |
 | Embeddings: provider port with a null adapter | Implemented; **no embedding provider works** — `/embeddings` answered `model_not_found` for every candidate id (`504009f`), so retrieval runs keyword-only |
-| RBAC guards and tenant binding wired to the session | Implemented, unit tested |
-| CSRF (signed double-submit) and security headers | Implemented, in-process tested |
-| Tenant isolation: composite FKs, tenant-scoped repository, RLS policies (D-011) | Implemented, unit tested |
+| RBAC guards and tenant binding wired to the session | Implemented; exercised through the real dependency chain over HTTP (Phase 24), not by overriding the guard |
+| CSRF (signed double-submit) and security headers | Implemented; exercised over real HTTP with `Secure` cookies (Phase 24). Formal security testing is Phase 26 |
+| Tenant isolation: composite FKs, tenant-scoped repository, RLS policies (D-011) | Implemented; **verified against a real database as a non-superuser** (Phase 24); policies widened for self-readable memberships, and that narrowing is pinned by three tests |
 | Append-only audit logs enforced by trigger (D-013) | Implemented, unit tested |
-| Initial migration, generated from ORM metadata | Offline SQL verified |
+| Initial migration, generated from ORM metadata | **Applied to real Postgres 16.15 + pgvector 0.8.6**; three migration-time bugs found and fixed (Phase 24) |
 | Postgres (Neon) | TLS verified; **not yet applied**, awaiting rotation |
+| Integration suite: schema, RLS, repositories, auth, ingestion, retrieval (§69 chain) | **42 tests against a real database** (D-026); RLS asserted as a non-superuser, not bypassed |
+| OpenAPI contract: routes, schemas, documented failures, declared authentication (§42) | **15 tests** over the served spec; found 3 routes documenting only success, and an API that declared no authentication at all |
+| Agent failure modes: prompt injection, incomplete data, hallucination resistance (§40) | **16 tests**; the framing is asserted, a live model's obedience is not |
+| CI: ruff, mypy, both suites, migration parity, frontend gates | `.github/workflows/ci.yml`, every push |
 | Redis (Upstash) | **Verified live** — Redis 8.4.0, TLS required |
 | LLM (Qroq) | **Wired and live-verified** — fast (`openai/gpt-oss-20b`) and reasoning (`openai/gpt-oss-120b`) confirmed against the endpoint; key still needs rotation |
 | Agent graph (§7 roles, §24 state, D-007 validation layer) | Implemented, 12 unit tests + 2 opt-in live tests |
@@ -133,16 +138,24 @@ Neither flow sends mail yet. Both queue a message to `email_outbox` and stop,
 because no mail provider is configured. `python -m app.cli.outbox` prints the
 queued messages, which is how the flows are exercised end to end offline.
 
-The migration has never been applied to a live database. It has been rendered
-to SQL in both directions and asserted against the ORM, which catches drift and
-malformed DDL but cannot prove that Neon accepts it. Treat every capability
-above as *implemented but not verified* until the corresponding phase runs.
+The migration **has** now been applied — to an ephemeral
+`pgvector/pgvector:pg16` container, in Phase 24, by the integration suite. That
+is why three defects it would have shipped with are fixed: an HNSW index missing
+its operator class, row-level security never being enabled, and a login path
+that resolved every user to zero workspaces. What remains unverified is Neon
+itself: that the hosted provider exposes pgvector and accepts these settings.
+Everything else above marked *implemented* is exercised by a real database
+unless its row says otherwise.
 
 ---
 
 ## Blockers
 
 Three items gate the next phase, all requiring action outside the codebase:
+
+Phase 24 removed the fourth: there is no longer an untested migration. What
+remains below is what a database, a credential or a browser outside this
+repository can only answer.
 
 1. **Rotate the Qroq API key.** It was shared in plaintext — and it has since
    been used for two live provider calls, which proves it works and does not
@@ -199,12 +212,20 @@ Swagger UI at `http://localhost:3000/docs` when the frontend proxies, or
 ### Tests and lint
 
 ```bash
-python -m pytest -q                   # 1068 passed, 3 skipped, no database required
+python -m pytest -q                   # 1141 passed, 3 skipped
+python -m pytest -m "not integration" # 1099 passed — no database, no Docker
+python -m pytest -m integration tests/integration   # 42 passed, needs Docker or a URL
 cd frontend && npm test               # 79 vitest tests (pure modules, fixtures, write client)
 CATALOGGUARD_LIVE_LLM=1 python -m pytest tests/agent -q   # opt-in: 3 live LLM calls (2 schemas + 1 tool call)
 python -m ruff check app tests alembic scripts
 python -m mypy app
 ```
+
+The integration suite starts its own `pgvector/pgvector:pg16` container, or
+uses `CATALOGGUARD_TEST_DATABASE_URL` if you set it — which is what CI does. It
+runs as a non-superuser role, because a superuser bypasses RLS and would make
+every isolation test meaningless. Without Docker and without that variable it
+**skips** with a reason rather than passing against nothing (D-026).
 
 ### Migrations
 

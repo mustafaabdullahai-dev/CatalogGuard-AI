@@ -385,6 +385,18 @@ This machine has **no sudo and no apt-get**, so local Postgres and Redis install
 ### Open items
 
 - `pgvector` extension must be confirmed enabled on the Neon database. D-006 depends on it. Not yet verified: requires a live authenticated connection.
+- **AMENDED (Phase 24, 2026-10-10).** The pgvector side of this decision is now
+  verified against a real server, and two of its assumptions were wrong.
+  pgvector 0.8.6 requires an explicit operator class for an HNSW index; the
+  generated index named none, so `alembic upgrade head` failed on any real
+  database. The index now declares `vector_cosine_ops`, and the migration
+  generator raises on a string-valued operator class rather than dropping it.
+  Retrieval is exercised end to end against real vectors, including the
+  1536-dimension column, ordering, SQL-level metadata filters and citations.
+  **Still unverified:** the Neon instance itself. Everything above ran against
+  an ephemeral `pgvector/pgvector:pg16` container, which proves the schema and
+  the queries, not that the hosted provider exposes the extension or accepts
+  these settings.
 
 ---
 
@@ -489,6 +501,38 @@ scopes correctly.
   because the ORM is not the only thing that will ever touch this database.
 - **`current_setting(name)` without the missing-ok flag.** Raises on an unbound
   connection, turning a policy failure into an availability failure.
+
+### Amendment — Phase 24 (2026-10-10): self-readable memberships
+
+**Status:** Implemented. The three-layer model above is unchanged; layer 3 now
+has one documented exception.
+
+Phase 24 ran the system against a real database and found that **every
+signed-in user resolved to zero workspaces.** `workspace_memberships` is
+tenant-scoped, so it carries the `tenant_isolation` policy — and
+`get_auth_context` must read a user's memberships to learn which workspaces
+they belong to. Nothing can bind a workspace before that read, because the read
+is what names the workspace. The policy returned nothing, `/auth/me` answered
+with a valid user and an empty workspace list, and every subsequent request
+failed the tenant check.
+
+The decision now adds a second binding, `app.current_user_id`, with the same
+`SET LOCAL` containment as the workspace:
+
+- `workspace_memberships` is the only self-readable table. Its policy is
+  `USING (user_id = current_user OR workspace_id = current_workspace)`.
+- **`WITH CHECK` is not widened.** Writes still require the bound workspace, so
+  self-read cannot become self-enrolment.
+- `get_auth_context` binds the user id from the session it has already resolved
+  — never from a request, header or body.
+- Tables other than this one are unchanged: a user binding grants nothing on a
+  normal tenant table.
+
+Rejected: exempting `workspace_memberships` from RLS, and adding a
+privileged-read role. Both solve availability by making every user's
+memberships readable to anyone who can query the table. Three tests in
+`tests/integration/test_schema_real.py` pin the narrowness — own rows visible,
+other users' rows invisible, self-enrolment refused.
 
 
 ---
@@ -1721,3 +1765,81 @@ tool calls, execution jobs — with nothing reading them.
   and the component lines are what a debugging session actually needs.
 - **Gating the summary on `read`.** Every role has `read`, including the
   merchandiser whose view of the system should not include its failure rates.
+
+---
+
+## D-026 — Test Infrastructure: A Real Database, the Served Spec, and CI as the Gate
+
+**Phase:** 24 — Testing
+**Date:** 2026-10-10
+**Status:** Implemented
+
+### Decision
+
+- **The suite starts a real Postgres.** `tests/integration` provisions
+  `pgvector/pgvector:pg16` through the Docker CLI when
+  `CATALOGGUARD_TEST_DATABASE_URL` is unset, and uses that URL when it is set.
+  With neither available the suite **skips loudly** rather than passing against
+  nothing.
+- **RLS assertions run as a `NOSUPERUSER` role.** Superusers bypass policies
+  even when `FORCE`d, so an isolation test run as the owner observes nothing.
+  The suite creates `catalogguard_app` and runs as it.
+- **No `testcontainers` dependency.** Four `subprocess` calls against a Docker
+  CLI that Phase 28 requires anyway. No `pytest-docker` plugin, either.
+- **The API contract is asserted against `app.openapi()`**, not against
+  in-process status codes: every operation under the configured prefix, a
+  schema on every response, a documented failure mode, tenant header coverage,
+  and authentication declared as the session cookie on all 33 tenant routes.
+- **CI runs the gates on every push**: ruff, mypy, unit and agent suites,
+  integration against a service container, a migration-parity check that
+  regenerates and diffs, and the frontend's four gates. No coverage threshold —
+  a number that gates merges gets gamed; the parity check cannot.
+- **`ruff format` is not enforced.** The codebase has never been formatted with
+  it, and adopting it inside a testing phase would bury the change.
+
+### Reason
+
+Phase 24 found three bugs that 1119 passing unit tests could not: an HNSW index
+missing its operator class, RLS never enabled anywhere, and a login flow that
+resolved every user to zero workspaces. Each was invisible to a mock because
+each is a fact about a string reaching a parser, or a fact about a policy
+meeting a query.
+
+The contract test found two more that are smaller but the same species: three
+routes documenting no failure, and a spec that declared no authentication —
+so `/docs` described an API that appeared to need no credentials.
+
+The decisions above are the ones a reasonable person might have made
+differently. Docker-lifecycle ownership, superuser-versus-role, and a
+spec-level contract rather than a request-level one were the real choices; the
+rest follows.
+
+### Trade-offs accepted
+
+- **A bare `pytest` now starts a container** (~20s) instead of finishing in
+  seconds. CI's unit job uses `-m "not integration"`. The alternative is a
+  coverage claim that depends on a flag nobody sets.
+- **CI cannot run Windows or macOS.** One PostgreSQL dialect is the one D-006
+  commits to; testing three would test the platform, not this system.
+- **Migration parity is asserted on the generated file**, so a hand-edited
+  migration fails CI. That is the intent, and it means the migration is a build
+  artifact (§6) rather than a file to hand-maintain.
+- **No E2E, security or performance coverage yet.** Those are Phases 25–27, and
+  a testing phase that claimed them would be claiming work §64 assigns
+  elsewhere.
+
+### Alternatives rejected
+
+- **Testcontainers.** A dependency for four Docker calls, with its own socket
+  detection, image-pull retry and readiness race.
+- **Running the integration suite as the database owner.** The tenant-bound read
+  returned another workspace's row in the suite's first version; the assertion
+  caught it, and the owner is still wrong.
+- **A coverage percentage gate.** It measures lines executed, not behaviour, and
+  Phase 24's bugs would all have sat comfortably inside a threshold.
+- **Contract tests generated from a committed OpenAPI snapshot.** The snapshot
+  would drift and nobody would notice until the diff grew teeth; asserting
+  against the document the app actually serves keeps the two identical by
+  construction.
+- **Defeating `ruff format` on this phase.** It is a codebase-wide reformat
+  wearing a testing phase's clothes.
