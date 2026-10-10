@@ -4,7 +4,7 @@
 **§64 scope:** Testing
 **Governing sections:** §40 testing strategy, §42 API testing
 **Decisions:** [D-026](../../DECISIONS.md); [D-006](../../DECISIONS.md) amended (pgvector confirmed against 0.8.6; hosted instance still unverified); [D-011](../../DECISIONS.md) amended (self-readable memberships)
-**Commits:** `3fc8143`, `1fd86c3`, `7670864`, `b3f4c11`
+**Commits:** `3fc8143`, `1fd86c3`, `7670864`, `d9439ea`
 
 > This page replaces the 2026-10-06 stub, which said "integration and e2e
 > directories are empty" and "every existing claim of coverage is unit-level
