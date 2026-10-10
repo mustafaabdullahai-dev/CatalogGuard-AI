@@ -275,3 +275,165 @@ class TestConstraintsAndTriggers:
                 text("UPDATE audit_logs SET action = 'tampered' WHERE id = :id"),
                 {"id": entry.id},
             )
+
+class TestMembershipSelfRead:
+    """The policy added for session resolution must stay narrow (Phase 24).
+
+    `workspace_memberships` admits `user_id = the bound user` so that
+    `get_auth_context` can find a user's workspaces before it knows which
+    workspace the request belongs to. Without it, RLS denied the read and every
+    signed-in user resolved to zero workspaces — a broken product found only by
+    running against a real database.
+
+    The narrowness is the point. These tests are what stop a later reader from
+    widening "your own rows" into something larger.
+    """
+
+    async def _seed_memberships(
+        self, session: AsyncSession, mine: TenantContext, theirs: TenantContext
+    ) -> tuple[uuid4, uuid4]:
+        """Two members in two workspaces, written as the table owner.
+
+        Written as `postgres` rather than as the application role: an insert
+        with no bound workspace is refused by the policy under test, which is
+        the behaviour the last test in this class asserts.
+        """
+
+        user_id = mine.user_id
+        other_user_id = theirs.user_id
+        # `workspace_memberships` has real foreign keys, so the workspaces have
+        # to exist: the policy under test is not the constraint.
+        await session.execute(
+            text(
+                "INSERT INTO organizations (id, name, slug, is_active) "
+                "VALUES (:id, 'Acme', :slug, true)"
+            ),
+            {"id": uuid4(), "slug": f"org-{uuid4().hex[:8]}"},
+        )
+        organization = (
+            await session.execute(text("SELECT id FROM organizations LIMIT 1"))
+        ).scalar_one()
+        for tenant in (mine, theirs):
+            await session.execute(
+                text(
+                    "INSERT INTO workspaces (id, organization_id, name, slug) "
+                    "VALUES (:id, :org, :name, :slug)"
+                ),
+                {
+                    "id": tenant.workspace_id,
+                    "org": organization,
+                    "name": "Catalog",
+                    "slug": f"ws-{uuid4().hex[:8]}",
+                },
+            )
+        await session.execute(
+            text(
+                "INSERT INTO users (id, email, hashed_password, full_name, "
+                "is_active, is_superuser) VALUES (:a, 'mine@example.com', 'x', "
+                "'Mine', true, false), (:b, 'theirs@example.com', 'x', 'Theirs', "
+                "true, false)"
+            ),
+            {"a": user_id, "b": other_user_id},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO workspace_memberships (id, workspace_id, user_id, "
+                "role, created_at, updated_at) VALUES (:i, :w, :u, "
+                "'ecommerce_ops_manager', now(), now())"
+            ),
+            {"i": uuid4(), "w": mine.workspace_id, "u": user_id},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO workspace_memberships (id, workspace_id, user_id, "
+                "role, created_at, updated_at) VALUES (:i, :w, :u, "
+                "'ecommerce_ops_manager', now(), now())"
+            ),
+            {"i": uuid4(), "w": theirs.workspace_id, "u": other_user_id},
+        )
+        await session.commit()
+        return user_id, other_user_id
+
+    async def test_a_user_sees_their_own_membership_with_no_workspace_bound(
+        self,
+        db_session: AsyncSession,
+        app_session_factory: Any,
+        workspace: TenantContext,
+        other_workspace: TenantContext,
+    ) -> None:
+        from sqlalchemy import select
+
+        from app.db.session import bind_user
+        from app.models.tenancy import WorkspaceMembership
+
+        user_id, _ = await self._seed_memberships(db_session, workspace, other_workspace)
+
+        async with app_session_factory() as session:
+            # No workspace bound — this is the state `get_auth_context` is in.
+            await bind_user(session, user_id)
+            rows = (
+                await session.execute(
+                    select(WorkspaceMembership).where(
+                        WorkspaceMembership.user_id == user_id
+                    )
+                )
+            ).scalars().all()
+
+        assert len(rows) == 1
+        assert rows[0].workspace_id == workspace.workspace_id
+
+    async def test_binding_your_own_user_does_not_reveal_another_membership(
+        self,
+        db_session: AsyncSession,
+        app_session_factory: Any,
+        workspace: TenantContext,
+        other_workspace: TenantContext,
+    ) -> None:
+        from sqlalchemy import select
+
+        from app.db.session import bind_user
+        from app.models.tenancy import WorkspaceMembership
+
+        user_id, _ = await self._seed_memberships(db_session, workspace, other_workspace)
+
+        async with app_session_factory() as session:
+            await bind_user(session, user_id)
+            everything = (await session.execute(select(WorkspaceMembership))).scalars().all()
+
+        # One row: yours. The other user in the other workspace stays invisible,
+        # which is what makes the widened predicate safe to ship.
+        assert [row.user_id for row in everything] == [user_id]
+
+    async def test_the_widened_predicate_does_not_cover_writes(
+        self,
+        db_session: AsyncSession,
+        app_session_factory: Any,
+        workspace: TenantContext,
+        other_workspace: TenantContext,
+    ) -> None:
+        """Self-read must not become self-enrolment.
+
+        `USING` is widened; `WITH CHECK` is not. Writing your own membership
+        into somebody else's workspace stays refused with only a user bound.
+        """
+        from sqlalchemy.exc import DBAPIError
+
+        from app.db.session import bind_user
+
+        user_id, _ = await self._seed_memberships(db_session, workspace, other_workspace)
+
+        async with app_session_factory() as session:
+            await bind_user(session, user_id)
+            with pytest.raises(DBAPIError):
+                await session.execute(
+                    text(
+                        "INSERT INTO workspace_memberships (id, workspace_id, "
+                        "user_id, role, created_at, updated_at) VALUES (:i, :w, "
+                        ":u, 'merchandiser', now(), now())"
+                    ),
+                    {
+                        "i": uuid4(),
+                        "w": other_workspace.workspace_id,
+                        "u": user_id,
+                    },
+                )

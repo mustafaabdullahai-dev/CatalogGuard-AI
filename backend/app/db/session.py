@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import (
 import app.models  # noqa: F401
 from app.core.config import get_settings
 from app.db.base import Base  # noqa: F401  (re-exported for callers)
-from app.db.rls import bind_tenant_statement, clear_tenant_statement
+from app.db.rls import bind_tenant_statement, bind_user_statement, clear_tenant_statement
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -98,6 +98,18 @@ async def bind_tenant(session: AsyncSession, workspace_id: UUID | str) -> None:
     policy before the identity layer.
     """
     await session.execute(bind_tenant_statement(workspace_id))
+
+
+async def bind_user(session: AsyncSession, user_id: UUID | str) -> None:
+    """Bind the current transaction to one user, the way `bind_tenant` binds a workspace.
+
+    Needed before a workspace is known: session resolution reads the user's
+    memberships to find out which workspaces they have. Without this, RLS
+    returns nothing and every signed-in user resolves to zero workspaces
+    (D-011, Phase 24). Call it with the id of the user the session resolved
+    to, never with one a caller supplied.
+    """
+    await session.execute(bind_user_statement(user_id))
 
 
 async def clear_tenant(session: AsyncSession) -> None:

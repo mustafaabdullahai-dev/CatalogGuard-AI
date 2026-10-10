@@ -39,6 +39,13 @@ from sqlalchemy.sql.elements import TextClause
 # query log.
 TENANT_SETTING = "app.current_workspace"
 
+# Read by the policies that admit a user's own rows before a workspace is known.
+# Phase 24 found the reason this has to exist: session resolution looks up a
+# user's memberships *before* it knows which workspace the request belongs to —
+# the membership is what tells it. With only `TENANT_SETTING` available, RLS
+# returned nothing and every signed-in user resolved to zero workspaces.
+USER_SETTING = "app.current_user_id"
+
 # Tables that intentionally carry no tenant column and therefore no policy.
 #
 # `organizations` sits above the tenant boundary. `users` is global because one
@@ -52,6 +59,14 @@ GLOBAL_TABLES = frozenset(
         "workspaces",
     }
 )
+
+# Tables a user must be able to read before a workspace is known.
+#
+# `workspace_memberships` is the only one. The predicate is deliberately narrow:
+# `user_id = the bound user`, so a signed-in person sees their own memberships
+# and nobody else's. The write side keeps the plain tenant predicate — otherwise
+# setting one's own user id would grant membership of any workspace.
+SELF_READABLE_TABLES = frozenset({"workspace_memberships"})
 
 
 def _tenant_predicate() -> str:
@@ -83,6 +98,22 @@ def bind_tenant_statement(workspace_id: UUID | str) -> TextClause:
     )
 
 
+def bind_user_statement(user_id: UUID | str) -> TextClause:
+    """Bind the current transaction to one user.
+
+    The same `SET LOCAL` containment as the workspace, for the same reason: a
+    pooled connection must not carry one request's identity into the next.
+
+    This is bound from the session that has already been resolved, never from
+    anything a caller supplies. It authorizes *reading your own rows* on the
+    tables in `SELF_READABLE_TABLES`, and nothing else.
+    """
+    return text("SELECT set_config(:setting, :user_id, true)").bindparams(
+        setting=USER_SETTING,
+        user_id=str(user_id),
+    )
+
+
 def clear_tenant_statement() -> TextClause:
     """Clear the tenant context inside the current transaction.
 
@@ -94,17 +125,32 @@ def clear_tenant_statement() -> TextClause:
     )
 
 
+def _self_predicate() -> str:
+    """SQL comparing a row's `user_id` to the bound user."""
+
+    return f"user_id = NULLIF(current_setting('{USER_SETTING}', true), '')::uuid"
+
+
 def create_policy_sql(table_name: str) -> str:
     """`CREATE POLICY` statement for one tenant-owned table.
 
     `WITH CHECK` closes the write side. Without it a tenant could insert a row
     attributed to another workspace, which no read-side policy would catch
     until someone queried for it.
+
+    For a self-readable table the read side additionally admits the caller's own
+    rows, and only the read side: `USING (own OR tenant) WITH CHECK (tenant)`.
+    Self-read is what session resolution needs — it must find a user's
+    memberships before it knows the workspace — and keeping the narrower
+    predicate on writes means self-read cannot be turned into self-enrolment.
     """
     predicate = _tenant_predicate()
+    using = predicate
+    if table_name in SELF_READABLE_TABLES:
+        using = f"({_self_predicate()} OR {predicate})"
     return (
         f"CREATE POLICY tenant_isolation ON {table_name} "
-        f"FOR ALL USING ({predicate}) WITH CHECK ({predicate})"
+        f"FOR ALL USING ({using}) WITH CHECK ({predicate})"
     )
 
 

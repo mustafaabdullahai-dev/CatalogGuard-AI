@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.logging import bind_context
 from app.db.base import TenantContext
-from app.db.session import bind_tenant, get_session
+from app.db.session import bind_tenant, bind_user, get_session
 from app.models.tenancy import AuthSession, RoleCapabilities, User, WorkspaceMembership
 from app.services.auth import sessions as session_service
 
@@ -120,6 +120,11 @@ async def get_auth_context(
     if user is None:
         raise _UNAUTHENTICATED
 
+    # Bound before the membership query, not after: the memberships are what
+    # name the workspaces, so nothing can bind a workspace first. The policy on
+    # `workspace_memberships` admits `user_id = this user` for exactly this
+    # read, and writes still require a bound workspace.
+    await bind_user(db, user.id)
     memberships = await db.execute(
         select(WorkspaceMembership).where(WorkspaceMembership.user_id == user.id)
     )
