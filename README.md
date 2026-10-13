@@ -388,3 +388,7 @@ Section 71 of the master prompt, adopted verbatim. No live marketplace
 integrations. The connector abstraction will be built against a mock adapter so
 the seam is proven, but real rate limits and partial-failure modes stay
 unvalidated until the connector phase.
+
+---
+
+#GenAIwithAM
