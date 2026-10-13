@@ -502,6 +502,7 @@ app/
 lib/
    api.ts            server reads: cookies forwarded, workspace from the session,
                      every read returns { data, source, reason }
+   normalize.ts      the API's shapes → the console's model (Phase 25)
    writeClient.ts    browser writes: same-origin /api/*, CSRF, refusal wording
    pagination.ts     URL state: page arithmetic, query building, pluralisation
    provenance.ts     the canvas: ranked claims, authority resolution, ties
@@ -521,6 +522,31 @@ lib/
   second approver; a stage that did not run is `not run`, never a pass (§18).
 - **The risk bands are readable text.** `--band-*` tokens exist because the
   vivid band colours measured 1.9:1–3.1:1 as badge text; the hues are unchanged.
+
+### The seam (D-023, amended in Phase 25)
+
+```
+fixtures.ts   shaped like the CONSOLE expects
+types.ts      shaped like the CONSOLE expects
+schemas/*.py  shaped like the API actually serves
+          ╲
+           normalize.ts   ── the only place the two vocabularies meet
+```
+
+Phase 21 drove the console against a stub serving its own fixtures, so the two
+halves of the system had each been verified and the seam had not. Against the
+real API, `/reconciliation` crashed the server: every list endpoint returns a
+named collection with no envelope (`{sources: [...]}`), the console works in
+`Page<T>` (`{items, total, limit, offset}`), and `plural()` calls
+`count.toLocaleString()` on `undefined`.
+
+`lib/normalize.ts` now owns that mapping, and `load()` **requires** a
+normaliser argument — the `as T` cast it replaced is precisely what let the
+disagreement survive two phases. Rows pass through unchanged: the console's row
+types are the API's field names, so renaming them here would create a second
+vocabulary to keep in step. The one genuinely missing field, a source's
+`status`, is derived from the record count the API does send rather than
+invented.
 
 ---
 
@@ -606,13 +632,44 @@ GET /api/v1/observability/summary  ──►  rows the system already wrote
 
 ---
 
+## Browser validation (D-027, Phase 25)
+
+```
+Chrome ──CDP over WebSocket──► frontend/tests/browser/validate.mjs
+                                    │
+                                    ├─ console    errors, warnings, exceptions
+                                    ├─ network    status, payloads, aborts, CSRF
+                                    ├─ application cookies, localStorage, session
+                                    ├─ performance LCP, CLS, layout time
+                                    └─ responsive three widths, scrollWidth vs clientWidth
+```
+
+- **No dependency.** Node 22's global `WebSocket` plus an installed Chrome is
+  enough for every signal §41 asks for. Playwright is the better answer at
+  scale and is declined for now, not rejected.
+- **It runs against the built console.** `next dev` does not hydrate in this
+  environment; `next start` does. Validating the product rather than the dev
+  server is the more honest target.
+- **Aborts are classified, not ignored.** The console prefetches routes and
+  cancels them on navigation; 64 such aborts buried the real findings in the
+  first run.
+- **A write, verified in the database.** The approve path is driven end to end,
+  because that is the only thing that proves CSRF, the workspace header and
+  session forwarding at once.
+- **`CATALOGGUARD_API_URL` is read at build time.** Next bakes `rewrites()` into
+  `routes-manifest.json`, so a value supplied only to `next start` is ignored
+  and the proxy silently talks to `127.0.0.1:8000`.
+
+---
+
 ## Testing (D-026, Phase 24)
 
 ```
 tests/unit          no database, fast, the default shape of the codebase
 tests/agent         graph, tools, injection, incomplete data, hallucinations
 tests/integration   real pgvector 0.8.6 in a container, or a URL you supply
-tests/e2e           empty — Phase 25
+frontend/browser    §41's five checks over CDP (Phase 25, D-027)
+tests/e2e           still empty — it needs a running stack; Phase 28
 ```
 
 - **A real engine, not a described one.** The integration suite starts
@@ -631,6 +688,9 @@ tests/e2e           empty — Phase 25
   tenant-scoped, but reading it is what names the workspace). All three are
   facts about strings reaching a parser and policies meeting queries — exactly
   what a mock cannot show.
+- **The browser harness is not yet a gate.** It needs a running API, a
+  database and a built console; Phase 28 builds the containers that make that
+  cheap enough to run on every push.
 - **CI runs the gates on every push**, including a parity check that regenerates
   the migration and fails if it differs.
 

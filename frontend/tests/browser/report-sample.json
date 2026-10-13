@@ -1,0 +1,461 @@
+{
+  "base_url": "http://127.0.0.1:3001",
+  "console": [],
+  "network": [
+    {
+      "screen": "dashboard",
+      "responses": [
+        {
+          "url": "http://127.0.0.1:3001/approvals?_rsc=5CB68i4pnAekjehf",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/catalog?_rsc=5CB68i4pnAekjehf",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/reconciliation?_rsc=5CB68i4pnAekjehf",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/sandbox?_rsc=5CB68i4pnAekjehf",
+          "status": 200,
+          "method": "GET"
+        }
+      ],
+      "failed": 22
+    },
+    {
+      "screen": "catalog",
+      "responses": [
+        {
+          "url": "http://127.0.0.1:3001/catalog",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/_next/static/chunks/0tnwr8sl96msk.css",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/_next/static/chunks/1u5zan5bs9a7v.js",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/_next/static/chunks/1wym20oe2_8ih.js",
+          "status": 200,
+          "method": "GET"
+        }
+      ],
+      "failed": 11
+    },
+    {
+      "screen": "reconciliation",
+      "responses": [
+        {
+          "url": "http://127.0.0.1:3001/reconciliation",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/_next/static/chunks/0tnwr8sl96msk.css",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/_next/static/chunks/1u5zan5bs9a7v.js",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/_next/static/chunks/1wym20oe2_8ih.js",
+          "status": 200,
+          "method": "GET"
+        }
+      ],
+      "failed": 10
+    },
+    {
+      "screen": "approvals",
+      "responses": [
+        {
+          "url": "http://127.0.0.1:3001/approvals",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/_next/static/chunks/0tnwr8sl96msk.css",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/_next/static/chunks/1u5zan5bs9a7v.js",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/_next/static/chunks/1wym20oe2_8ih.js",
+          "status": 200,
+          "method": "GET"
+        }
+      ],
+      "failed": 10
+    },
+    {
+      "screen": "sandbox",
+      "responses": [
+        {
+          "url": "http://127.0.0.1:3001/sandbox",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/_next/static/chunks/0tnwr8sl96msk.css",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/_next/static/chunks/1u5zan5bs9a7v.js",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/_next/static/chunks/1wym20oe2_8ih.js",
+          "status": 200,
+          "method": "GET"
+        }
+      ],
+      "failed": 11
+    },
+    {
+      "screen": "compliance",
+      "responses": [
+        {
+          "url": "http://127.0.0.1:3001/compliance",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/_next/static/chunks/0tnwr8sl96msk.css",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/_next/static/chunks/1u5zan5bs9a7v.js",
+          "status": 200,
+          "method": "GET"
+        },
+        {
+          "url": "http://127.0.0.1:3001/_next/static/chunks/1wym20oe2_8ih.js",
+          "status": 200,
+          "method": "GET"
+        }
+      ],
+      "failed": 11
+    }
+  ],
+  "application": {
+    "cookies": [
+      {
+        "name": "cg_csrf",
+        "domain": "127.0.0.1",
+        "httpOnly": false,
+        "secure": true,
+        "sameSite": "Lax",
+        "path": "/"
+      },
+      {
+        "name": "cg_session",
+        "domain": "127.0.0.1",
+        "httpOnly": true,
+        "secure": true,
+        "sameSite": "Lax",
+        "path": "/"
+      }
+    ],
+    "local_storage_keys": [],
+    "session_storage_keys": []
+  },
+  "performance": {
+    "dashboard": {
+      "lcp": 404,
+      "cls": 0,
+      "samples": {
+        "lcp": 1,
+        "cls": 0
+      },
+      "Nodes": 979,
+      "LayoutCount": 6,
+      "LayoutDuration": 0.010881,
+      "RecalcStyleDuration": 0.007645,
+      "ScriptDuration": 0.019892,
+      "TaskDuration": 0.135583,
+      "JSHeapUsedSize": 5424940,
+      "DomContentLoaded": 2915.576937
+    },
+    "catalog": {
+      "lcp": 188,
+      "cls": 0,
+      "samples": {
+        "lcp": 1,
+        "cls": 1
+      },
+      "Nodes": 1326,
+      "LayoutCount": 6,
+      "LayoutDuration": 0.012142,
+      "RecalcStyleDuration": 0.007071,
+      "ScriptDuration": 0.021266,
+      "TaskDuration": 0.124032,
+      "JSHeapUsedSize": 6061312,
+      "DomContentLoaded": 2916.531815
+    },
+    "reconciliation": {
+      "lcp": 236,
+      "cls": 0,
+      "samples": {
+        "lcp": 1,
+        "cls": 1
+      },
+      "Nodes": 1914,
+      "LayoutCount": 6,
+      "LayoutDuration": 0.016858,
+      "RecalcStyleDuration": 0.005846,
+      "ScriptDuration": 0.019302,
+      "TaskDuration": 0.121781,
+      "JSHeapUsedSize": 7068224,
+      "DomContentLoaded": 2917.478246
+    },
+    "approvals": {
+      "lcp": 152,
+      "cls": 0,
+      "samples": {
+        "lcp": 1,
+        "cls": 1
+      },
+      "Nodes": 2430,
+      "LayoutCount": 6,
+      "LayoutDuration": 0.022375,
+      "RecalcStyleDuration": 0.008125,
+      "ScriptDuration": 0.025527,
+      "TaskDuration": 0.131031,
+      "JSHeapUsedSize": 7948940,
+      "DomContentLoaded": 2918.409139
+    },
+    "sandbox": {
+      "lcp": 108,
+      "cls": 0,
+      "samples": {
+        "lcp": 1,
+        "cls": 1
+      },
+      "Nodes": 2659,
+      "LayoutCount": 6,
+      "LayoutDuration": 0.003451,
+      "RecalcStyleDuration": 0.003648,
+      "ScriptDuration": 0.023767,
+      "TaskDuration": 0.083054,
+      "JSHeapUsedSize": 9454256,
+      "DomContentLoaded": 2919.304569
+    },
+    "compliance": {
+      "lcp": 116,
+      "cls": 0,
+      "samples": {
+        "lcp": 1,
+        "cls": 1
+      },
+      "Nodes": 2834,
+      "LayoutCount": 6,
+      "LayoutDuration": 0.004757,
+      "RecalcStyleDuration": 0.003588,
+      "ScriptDuration": 0.044672,
+      "TaskDuration": 0.113275,
+      "JSHeapUsedSize": 10962784,
+      "DomContentLoaded": 2920.143212
+    }
+  },
+  "responsive": [
+    {
+      "viewport": "desktop",
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "horizontal_scroll": false,
+      "overflowing_elements": []
+    },
+    {
+      "viewport": "tablet",
+      "scrollWidth": 834,
+      "clientWidth": 834,
+      "horizontal_scroll": false,
+      "overflowing_elements": []
+    },
+    {
+      "viewport": "mobile",
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "horizontal_scroll": false,
+      "overflowing_elements": [
+        "table",
+        "thead",
+        "tr",
+        "th",
+        "th"
+      ]
+    }
+  ],
+  "flows": {
+    "sign_in": {
+      "landed_on": "/"
+    },
+    "approval_queue_visible": true,
+    "approve_button": {
+      "label": "Approve",
+      "disabled": false
+    },
+    "approval_write": [
+      {
+        "url": "http://127.0.0.1:3001/api/v1/auth/me",
+        "status": 200,
+        "method": "GET"
+      },
+      {
+        "url": "http://127.0.0.1:3001/api/v1/auth/csrf",
+        "status": 200,
+        "method": "GET"
+      },
+      {
+        "url": "http://127.0.0.1:3001/api/v1/approvals/2837b691-a4e9-441d-bb5b-8211b8d0c34e/approve",
+        "status": 200,
+        "method": "POST"
+      },
+      {
+        "url": "http://127.0.0.1:3001/approvals?_rsc=g2UMf8nOuMh1DUsV",
+        "status": 200,
+        "method": "GET"
+      },
+      {
+        "url": "http://127.0.0.1:3001/?_rsc=AU6DTT46DVXZ7jWj",
+        "status": 200,
+        "method": "GET"
+      },
+      {
+        "url": "http://127.0.0.1:3001/catalog?_rsc=AU6DTT46DVXZ7jWj",
+        "status": 200,
+        "method": "GET"
+      },
+      {
+        "url": "http://127.0.0.1:3001/reconciliation?_rsc=AU6DTT46DVXZ7jWj",
+        "status": 200,
+        "method": "GET"
+      },
+      {
+        "url": "http://127.0.0.1:3001/sandbox?_rsc=AU6DTT46DVXZ7jWj",
+        "status": 200,
+        "method": "GET"
+      },
+      {
+        "url": "http://127.0.0.1:3001/compliance?_rsc=AU6DTT46DVXZ7jWj",
+        "status": 200,
+        "method": "GET"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "area": "application",
+      "severity": "info",
+      "detail": "session cookie: HttpOnly=true Secure=true SameSite=Lax"
+    },
+    {
+      "area": "application",
+      "severity": "info",
+      "detail": "localStorage empty: the session is cookie-only"
+    },
+    {
+      "area": "network",
+      "severity": "info",
+      "detail": "dashboard: cancelled prefetch (expected)"
+    },
+    {
+      "area": "console",
+      "severity": "info",
+      "detail": "dashboard: console clean (31 responses)"
+    },
+    {
+      "area": "network",
+      "severity": "info",
+      "detail": "catalog: cancelled prefetch (expected)"
+    },
+    {
+      "area": "console",
+      "severity": "info",
+      "detail": "catalog: console clean (20 responses)"
+    },
+    {
+      "area": "network",
+      "severity": "info",
+      "detail": "reconciliation: cancelled prefetch (expected)"
+    },
+    {
+      "area": "console",
+      "severity": "info",
+      "detail": "reconciliation: console clean (20 responses)"
+    },
+    {
+      "area": "network",
+      "severity": "info",
+      "detail": "approvals: cancelled prefetch (expected)"
+    },
+    {
+      "area": "console",
+      "severity": "info",
+      "detail": "approvals: console clean (20 responses)"
+    },
+    {
+      "area": "network",
+      "severity": "info",
+      "detail": "sandbox: cancelled prefetch (expected)"
+    },
+    {
+      "area": "console",
+      "severity": "info",
+      "detail": "sandbox: console clean (20 responses)"
+    },
+    {
+      "area": "network",
+      "severity": "info",
+      "detail": "compliance: cancelled prefetch (expected)"
+    },
+    {
+      "area": "console",
+      "severity": "info",
+      "detail": "compliance: console clean (20 responses)"
+    },
+    {
+      "area": "responsive",
+      "severity": "info",
+      "detail": "desktop: no horizontal overflow at 1440px"
+    },
+    {
+      "area": "responsive",
+      "severity": "info",
+      "detail": "tablet: no horizontal overflow at 834px"
+    },
+    {
+      "area": "responsive",
+      "severity": "info",
+      "detail": "mobile: no horizontal overflow at 390px"
+    },
+    {
+      "area": "network",
+      "severity": "info",
+      "detail": "approve wrote POST /api/v1/approvals/2837b691-a4e9-441d-bb5b-8211b8d0c34e/approve -> 200 (CSRF accepted)"
+    }
+  ],
+  "note": "One run of `npm run validate:browser` against the production build, the real API and PostgreSQL 16.15. 0 lines about cancelled route prefetches were removed; they are counted, not listed."
+}

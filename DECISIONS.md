@@ -1464,7 +1464,29 @@ the connector seam, so `execute_proposal` is the seam's first real caller and
 
 ## D-023 — Frontend Data Access: Forwarded Session, Stated Fallbacks, URL Filters
 
-**Status:** Implemented (Phase 21). Verified against a stub API in a browser; never against the real backend, which has no database (D-006).
+**Status:** Implemented (Phase 21). **Amended in Phase 25** — verified against the real backend for the first time, which required a normalisation seam between the API's responses and the console's model.
+
+**Phase 25 amendment.** Phase 21 drove the console against a stub serving the
+frontend's own fixtures, so the fixtures, the console and the backend each
+agreed with themselves and not with each other. Against the real API,
+`/reconciliation` crashed the server: every list endpoint returns a named
+collection with no envelope (`{sources: [...]}`), the console works in
+`Page<T>` (`{items, total, limit, offset}`), and `plural()` calls
+`count.toLocaleString()` on `undefined`.
+
+- **`lib/normalize.ts` owns that mapping**, and `load()` now *requires* a
+  normaliser argument. The `as T` cast it replaced is what let the
+  disagreement survive two phases: nothing forced a function to state what the
+  response meant.
+- **A source's status is derived, not invented.** The API has no status field;
+  the console's badges read one. It comes from the record count, which the API
+  does send, so a badge marked `active` means something observable.
+- **Rows pass through unchanged.** The console's row types are the API's field
+  names; renaming them here would create a second vocabulary to keep in step.
+- **The fixtures keep the console's shape.** They are what the screens are
+  designed against and what the 93 frontend tests assert. The gap was never
+  that the fixtures looked like the console — it was that nothing compared
+  them to the API.
 
 ### Decision
 
@@ -1843,3 +1865,66 @@ rest follows.
   construction.
 - **Defeating `ruff format` on this phase.** It is a codebase-wide reformat
   wearing a testing phase's clothes.
+
+---
+
+## D-027 — Browser Validation: Drive the Built Console Against the Real API, Over Raw CDP
+
+**Phase:** 25 — Browser DevTools validation
+**Date:** 2026-10-13
+**Status:** Implemented
+
+### Decision
+
+- **Validation runs against the built console, not the dev server.** `next dev`
+  (Turbopack, Next 16.3.8) serves HTML that never hydrates in this environment,
+  with no console error. `next start` hydrates and works. §41 asks whether the
+  product works; the dev server is not the product, and a finding that only
+  reproduces on a non-hydrating dev server would be a finding about the tool.
+- **The harness speaks CDP directly, with no dependencies.** Node 22's global
+  `WebSocket` and an installed Chrome are enough for the console, network,
+  cookie, storage and performance panels. Playwright was declined for now and
+  remains the better answer if the console grows.
+- **Aborted requests are classified, not counted as failures.** The console
+  prefetches every route and cancels those in flight on navigation. 64 of them
+  appeared in the first run and buried everything else. An abort that is *not* a
+  prefetch is still a failure.
+- **A validator that cannot fail is worse than none.** Three harness defects
+  were found and fixed, each of which produced a false pass: a hydration check
+  that missed hydrated React because the fibre key is non-enumerable, synthetic
+  input that left React's value tracker unchanged, and a `waitFor` that
+  returned a DOM node to `returnByValue`. They are recorded on the phase page
+  because the next person to write a browser test will hit the same three.
+- **A write, not just a read.** The approve path is driven end to end and the
+  result verified in the database, because a successful write is the only
+  thing that proves CSRF, the workspace header and the session forwarding all
+  at once.
+
+### Reason
+
+Phase 21 verified the console against a stub serving the console's own
+fixtures. Each half of the system had been tested; the seam between them had
+never been executed by anything. Four defects lived there, and the most
+damaging — signing in twice returning 500 for every request — was invisible to
+the entire backend suite because the query that broke was mocked.
+
+### Alternatives rejected
+
+- **Playwright as a dev dependency.** Better selectors, better waits, better
+  traces; also ~40 MB of browser downloads and a second source of truth about
+  which browser version runs. Reconsider when the suite needs more than one
+  page and a click.
+- **Driving `next dev`.** It reproduces a Turbopack defect this project does
+  not own, and the resulting report would describe the wrong system.
+- **Asserting on screenshots.** A screenshot proves something rendered; it does
+  not prove a cookie is HttpOnly or that a table scrolls inside its box. The
+  panels are the signal §41 asks for, and they are queryable.
+- **Treating every failed request as a defect.** 64 of the first run's 66
+  failures were the console cancelling its own prefetches.
+
+### Gaps
+
+- `backend/tests/e2e` remains empty. This harness needs a running stack, so it
+  is not part of `npm test`; wiring it into CI means the containers Phase 28
+  will build.
+- The dev-mode hydration failure is recorded as observed, not diagnosed.

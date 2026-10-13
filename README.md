@@ -29,9 +29,11 @@ decision written to an immutable audit row (§20, §38, §39) — are complete a
 tested, as is the execution engine that carries an approved change to a
 marketplace, reads it back to prove it landed, and rolls it back when it did
 not (§21, §51), with a `tool_calls` record of every tool invocation (§23) —
-all of it **1144 backend tests** (1141 passed, 3 opt-in live-provider tests
-skipped) — **42 of them against a real PostgreSQL 16.15 with pgvector 0.8.6**
-(D-026) — and a **79-test frontend suite**.
+all of it **1172 backend tests** (1169 passed, 3 opt-in live-provider tests
+skipped) — **43 of them against a real PostgreSQL 16.15 with pgvector 0.8.6**
+(D-026) — a **93-test frontend suite**, and a **Chrome DevTools run against the
+real API** (D-027): six screens console-clean, 0 failures, CLS 0, session
+cookie-only.
 The marketplace seam those writes go through exists too: one interface, one
 mock adapter, credentials encrypted at rest (§22, §33, D-005), with every live
 integration still deferred.
@@ -105,7 +107,7 @@ Every phase's delivery, gates and gaps are recorded in
 | Hybrid retrieval: GIN keyword `ts_rank` + pgvector cosine, deterministic rerank | Implemented; **verified against real vectors** (Phase 24) — ordering, SQL filters, citations, tenant isolation |
 | Compliance API: ingest / list / search with per-hit citations and a signal note | Implemented, 12 tests |
 | Embeddings: provider port with a null adapter | Implemented; **no embedding provider works** — `/embeddings` answered `model_not_found` for every candidate id (`504009f`), so retrieval runs keyword-only |
-| RBAC guards and tenant binding wired to the session | Implemented; exercised through the real dependency chain over HTTP (Phase 24), not by overriding the guard |
+| RBAC guards and tenant binding wired to the session | Implemented; exercised through the real dependency chain over HTTP (Phase 24) and through a browser session (Phase 25), not by overriding the guard. Phase 25 fixed a redundant join that 500'd every request for a user with two sessions |
 | CSRF (signed double-submit) and security headers | Implemented; exercised over real HTTP with `Secure` cookies (Phase 24). Formal security testing is Phase 26 |
 | Tenant isolation: composite FKs, tenant-scoped repository, RLS policies (D-011) | Implemented; **verified against a real database as a non-superuser** (Phase 24); policies widened for self-readable memberships, and that narrowing is pinned by three tests |
 | Append-only audit logs enforced by trigger (D-013) | Implemented, unit tested |
@@ -115,13 +117,14 @@ Every phase's delivery, gates and gaps are recorded in
 | OpenAPI contract: routes, schemas, documented failures, declared authentication (§42) | **15 tests** over the served spec; found 3 routes documenting only success, and an API that declared no authentication at all |
 | Agent failure modes: prompt injection, incomplete data, hallucination resistance (§40) | **16 tests**; the framing is asserted, a live model's obedience is not |
 | CI: ruff, mypy, both suites, migration parity, frontend gates | `.github/workflows/ci.yml`, every push |
+| Browser validation: §41's five checks over four flows, against the real API (D-027) | `npm run validate:browser`; dependency-free CDP harness, no Playwright. Not yet a CI gate — it needs a running stack (Phase 28) |
 | Redis (Upstash) | **Verified live** — Redis 8.4.0, TLS required |
 | LLM (Qroq) | **Wired and live-verified** — fast (`openai/gpt-oss-20b`) and reasoning (`openai/gpt-oss-120b`) confirmed against the endpoint; key still needs rotation |
 | Agent graph (§7 roles, §24 state, D-007 validation layer) | Implemented, 12 unit tests + 2 opt-in live tests |
 | Agent tools: normalize_field, resolve_source_authority, resolve_identity, assess_change_risk (§23) | Implemented, 30 tests + 1 opt-in live tool-call test; 4 of §23's 18 tools |
 | `tool_calls` and `agent_runs` records: one row per dispatch through `ToolRegistry`, arguments masked (§23, D-010) | Implemented, 9 tests; **nothing writes them in production** — no recorder attached to a live caller |
 | Sandbox simulation: §18 chain on a copy, §19 diff, `POST /change-proposals/{id}/simulate` | Implemented, 31 tests; compliance stage skipped (no corpus), route untested against a database |
-| Console: dashboard, catalog explorer, approval center, reconciliation canvas, sandbox, compliance center | Implemented, 79 frontend tests; six screens driven in a browser (Chrome DevTools), Lighthouse accessibility 100 on three pages; **never run against the real backend** (D-006), and three §30 pages have no route to render |
+| Console: dashboard, catalog explorer, approval center, reconciliation canvas, sandbox, compliance center | Implemented, 93 frontend tests; **six screens driven in Chrome against the real API and a real Postgres** (Phase 25, D-027) — console clean, CLS 0, no horizontal overflow at 390px, approve write verified in the database; Lighthouse accessibility 100 on three pages; three §30 pages have no route to render |
 | Approval decisions from the UI: approve, edit, reject, re-analysis, bulk, approve-all-LOW | Implemented; verified in a browser against a stub API — CSRF token and `X-Workspace-Id` on every write, each decision removed its row from the queue |
 | Copilot: five read-only catalog tools, enforced citations, `use_copilot` gate (§31, D-024) | Implemented, 53 tests; **API only** — no console panel, no streaming, and no model has answered yet (Qroq key unrotated); rate limiting is per process |
 | Request-scoped log context: `request_id`, workspace, user, status, duration (§55) | Implemented, 20 tests |
@@ -212,10 +215,11 @@ Swagger UI at `http://localhost:3000/docs` when the frontend proxies, or
 ### Tests and lint
 
 ```bash
-python -m pytest -q                   # 1141 passed, 3 skipped
-python -m pytest -m "not integration" # 1099 passed — no database, no Docker
-python -m pytest -m integration tests/integration   # 42 passed, needs Docker or a URL
-cd frontend && npm test               # 79 vitest tests (pure modules, fixtures, write client)
+python -m pytest -q                   # 1169 passed, 3 skipped
+python -m pytest -m "not integration" # 1126 passed — no database, no Docker
+python -m pytest -m integration tests/integration   # 43 passed, needs Docker or a URL
+cd frontend && npm test               # 93 vitest tests (modules, fixtures, API normalisation, write client)
+cd frontend && npm run validate:browser  # §41 against a running stack: Chrome over CDP, no dependency
 CATALOGGUARD_LIVE_LLM=1 python -m pytest tests/agent -q   # opt-in: 3 live LLM calls (2 schemas + 1 tool call)
 python -m ruff check app tests alembic scripts
 python -m mypy app
