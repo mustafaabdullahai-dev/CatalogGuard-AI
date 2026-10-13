@@ -40,6 +40,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import ImmutableTenantEntity, SoftDeletableTenantEntity, str_enum
+from app.db.types import JSONValue
 
 
 class ProductStatus(enum.StrEnum):
@@ -152,8 +153,8 @@ class Product(SoftDeletableTenantEntity):
     # Canonical attribute bag. JSONB because attribute sets vary by category
     # and marketplace; normalized columns exist only for fields that are
     # queried, filtered, or constrained.
-    attributes: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
-    media: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    attributes: Mapped[dict[str, Any]] = mapped_column(JSONValue, default=dict, nullable=False)
+    media: Mapped[dict[str, Any]] = mapped_column(JSONValue, default=dict, nullable=False)
 
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     last_reconciled_at: Mapped[datetime | None] = mapped_column(
@@ -229,7 +230,7 @@ class ProductVersion(ImmutableTenantEntity):
 
     product_id: Mapped[UUID] = mapped_column(nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
-    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSONValue, nullable=False)
     change_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     reconciliation_run_id: Mapped[UUID | None] = mapped_column(nullable=True)
 
@@ -340,7 +341,7 @@ class CatalogSource(SoftDeletableTenantEntity):
         str_enum(SourceType, name="source_type", length=32), nullable=False
     )
     # Detected schema, retained so a re-upload can be compared against it.
-    detected_schema: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    detected_schema: Mapped[dict[str, Any]] = mapped_column(JSONValue, default=dict, nullable=False)
     # D-002 "stamp": freshness and authorization context for every packet.
     last_sequence_timestamp: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -366,7 +367,7 @@ class SourceRecord(SoftDeletableTenantEntity):
 
     catalog_source_id: Mapped[UUID] = mapped_column(nullable=False)
     external_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    raw_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    raw_data: Mapped[dict[str, Any]] = mapped_column(JSONValue, nullable=False)
     sequence_timestamp: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -412,7 +413,7 @@ class MarketplaceProduct(SoftDeletableTenantEntity):
     external_product_id: Mapped[str] = mapped_column(String(255), nullable=False)
     external_sku: Mapped[str | None] = mapped_column(String(255), nullable=True)
     listing_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    raw_listing: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    raw_listing: Mapped[dict[str, Any]] = mapped_column(JSONValue, default=dict, nullable=False)
     # URL and handle changes carry SEO risk (Section 17), so they are tracked.
     listing_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     handle: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -457,7 +458,7 @@ class HealthScore(SoftDeletableTenantEntity):
     seo_readiness: Mapped[float] = mapped_column(Float, nullable=False)
     change_safety: Mapped[float] = mapped_column(Float, nullable=False)
     # The counts behind each dimension. This is what makes it explainable.
-    issue_counts: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    issue_counts: Mapped[dict[str, Any]] = mapped_column(JSONValue, default=dict, nullable=False)
     computed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

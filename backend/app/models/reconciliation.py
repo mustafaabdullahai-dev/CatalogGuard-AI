@@ -34,6 +34,7 @@ from app.db.base import (
     SoftDeletableTenantEntity,
     str_enum,
 )
+from app.db.types import JSONValue
 
 
 class ConflictType(enum.StrEnum):
@@ -147,8 +148,8 @@ class Conflict(SoftDeletableTenantEntity):
     )
     field_name: Mapped[str] = mapped_column(String(255), nullable=False)
     # Every competing value, keyed by source. Nothing is silently discarded.
-    competing_values: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    resolved_value: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    competing_values: Mapped[dict[str, Any]] = mapped_column(JSONValue, nullable=False)
+    resolved_value: Mapped[Any | None] = mapped_column(JSONValue, nullable=True)
     resolved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(
@@ -190,15 +191,15 @@ class ChangeProposal(SoftDeletableTenantEntity):
     change_ref: Mapped[str] = mapped_column(String(64), nullable=False)
 
     field_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    current_value: Mapped[Any | None] = mapped_column(JSON, nullable=True)
-    proposed_value: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    current_value: Mapped[Any | None] = mapped_column(JSONValue, nullable=True)
+    proposed_value: Mapped[Any | None] = mapped_column(JSONValue, nullable=True)
 
     # Section 37: confidence is not certainty, and never means "execute".
     reason: Mapped[str] = mapped_column(Text, nullable=False)
-    evidence: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
+    evidence: Mapped[list[Any]] = mapped_column(JSONValue, default=list, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     validation_status: Mapped[str] = mapped_column(String(32), nullable=False)
-    validation_errors: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
+    validation_errors: Mapped[list[Any]] = mapped_column(JSONValue, default=list, nullable=False)
 
     risk_level: Mapped[RiskLevel] = mapped_column(
         str_enum(RiskLevel, name="risk_level", length=16), nullable=False
@@ -209,7 +210,7 @@ class ChangeProposal(SoftDeletableTenantEntity):
     compliance_impact: Mapped[str] = mapped_column(
         String(32), default="NEUTRAL", nullable=False
     )
-    affected_channels: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
+    affected_channels: Mapped[list[Any]] = mapped_column(JSONValue, default=list, nullable=False)
     affected_relationships: Mapped[list[Any]] = mapped_column(
         JSON, default=list, nullable=False
     )
@@ -261,7 +262,7 @@ class RiskAssessment(SoftDeletableTenantEntity):
     )
     numeric_score: Mapped[float] = mapped_column(Float, nullable=False)
     # The factors and their contributions. Required: risk must be explainable.
-    factors: Mapped[list[Any]] = mapped_column(JSON, nullable=False)
+    factors: Mapped[list[Any]] = mapped_column(JSONValue, nullable=False)
     # Forces HIGH regardless of computed score. D-002 downstream-sync rule:
     # any change fanning out to channels after a human confirms a winner.
     escalated_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -299,8 +300,8 @@ class SimulationRun(SoftDeletableTenantEntity):
         str_enum(RiskLevel, name="risk_level", length=16), nullable=True
     )
     # Before/after tree diff for the UI, and a plain-language explanation.
-    diff: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
-    impact_report: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    diff: Mapped[dict[str, Any]] = mapped_column(JSONValue, default=dict, nullable=False)
+    impact_report: Mapped[dict[str, Any]] = mapped_column(JSONValue, default=dict, nullable=False)
     explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -359,7 +360,7 @@ class ApprovalAction(SoftDeletableTenantEntity):
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     # A modified approval carries the operator's edited values forward.
-    modified_value: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    modified_value: Mapped[Any | None] = mapped_column(JSONValue, nullable=True)
     decided_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -397,13 +398,13 @@ class ExecutionJob(SoftDeletableTenantEntity):
 
     # Pre-change state. Rollback is only offered when this exists AND the
     # connector supports it; Section 51 forbids promising universal rollback.
-    previous_state: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    previous_state: Mapped[dict[str, Any] | None] = mapped_column(JSONValue, nullable=True)
     rollback_supported: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
     rollback_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    marketplace_response: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    marketplace_response: Mapped[dict[str, Any] | None] = mapped_column(JSONValue, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     recovery_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -455,10 +456,10 @@ class AuditLog(ImmutableTenantEntity):
     entity_type: Mapped[str] = mapped_column(String(128), nullable=False)
     entity_id: Mapped[UUID | None] = mapped_column(nullable=True)
 
-    old_value: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    old_value: Mapped[Any | None] = mapped_column(JSONValue, nullable=True)
     new_value: Mapped[Any | None] = mapped_column(JSON, nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    evidence: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    evidence: Mapped[list[Any] | None] = mapped_column(JSONValue, nullable=True)
 
     risk_level: Mapped[RiskLevel | None] = mapped_column(
         str_enum(RiskLevel, name="risk_level", length=16), nullable=True

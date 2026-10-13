@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import re
 import sys
 
@@ -136,16 +137,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--email", required=True, help="Administrator email address")
     parser.add_argument(
         "--password",
-        prompt=True,
-        hide_input=True,
-        confirmation_prompt=True,
-        help="Administrator password. Not passed as an argument, so it does not "
-        "appear in shell history or in `ps`.",
+        help="Administrator password. Omitted means prompt without echo, so it "
+        "never appears in shell history or in `ps`.",
     )
     parser.add_argument("--organization", default="CatalogGuard")
     parser.add_argument("--workspace", default="Default Workspace")
     parser.add_argument("--full-name", default=None)
     args = parser.parse_args(argv)
+
+    # `argparse` has no `prompt=`: `prompt`, `hide_input` and
+    # `confirmation_prompt` are click's spelling, and passing them raised
+    # `TypeError: unexpected keyword argument 'prompt'` the moment this module
+    # was run. The first administrator could therefore never have been created
+    # by the documented command — found in Phase 25 while standing up a
+    # database to drive a browser against.
+    password = args.password or getpass.getpass("Administrator password: ")
+    if not args.password:
+        confirmation = getpass.getpass("Confirm password: ")
+        if password != confirmation:
+            print("passwords did not match", file=sys.stderr)
+            return 2
 
     configure_logging()
     get_settings()  # fail fast on a placeholder secret before touching the DB
@@ -153,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         result = asyncio.run(
             bootstrap(
                 email=args.email,
-                password=args.password,
+                password=password,
                 organization_name=args.organization,
                 workspace_name=args.workspace,
                 full_name=args.full_name,

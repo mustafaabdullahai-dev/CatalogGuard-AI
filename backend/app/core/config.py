@@ -12,6 +12,54 @@ from typing import Annotated, Literal
 from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+#: How many libpq `sslmode` values asyncpg spells the same way. `allow` is
+#: deliberately absent: asyncpg has no equivalent, and silently upgrading an
+#: `allow` to `require` would be a policy decision made by a string function.
+_SSLMODE_PASSTHROUGH = frozenset({"disable", "prefer", "require", "verify-ca", "verify-full"})
+
+
+def async_database_url(url: str) -> str:
+    """Translate a libpq connection string into one asyncpg accepts.
+
+    `DATABASE_URL` is documented, validated and stored in libpq's dialect —
+    `postgresql://user:pass@host/db?sslmode=require` — because that is what
+    Neon documents and what a psql session can use. asyncpg, which every query
+    in this application goes through, needs two changes to it:
+
+    - the driver in the scheme, or SQLAlchemy silently builds a *synchronous*
+      psycopg engine and the first connect fails with
+      `invalid connection option "server_settings"`;
+    - `ssl=` rather than `sslmode=`, because asyncpg has no `sslmode` parameter
+      and raises `TypeError: connect() got an unexpected keyword argument`.
+
+    Neither had ever been applied to the application's own engine: Alembic
+    normalized its URL, and every test either passed an already-asyncpg URL or
+    replaced the session dependency outright. Phase 25 found it by running the
+    documented `DATABASE_URL` against a real server.
+
+    `sslmode=allow` has no asyncpg equivalent and is not translated. Rather
+    than guess that the caller wanted TLS, the value is dropped so the
+    connection fails loudly instead of connecting unencrypted.
+    """
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url.split("://", 1)[1]
+    if url.startswith("postgresql://"):
+        url = "postgresql+asyncpg://" + url.split("://", 1)[1]
+
+    if "sslmode=" in url:
+        head, _, tail = url.partition("sslmode=")
+        mode, *rest = tail.split("&")
+        remainder = "&".join(part for part in rest if part)
+        if mode in _SSLMODE_PASSTHROUGH:
+            url = f"{head}ssl={mode}" + (f"&{remainder}" if remainder else "")
+        elif remainder:
+            url = f"{head}{remainder}"
+        else:
+            # Dropping the only parameter must not leave a trailing `?`, which
+            # asyncpg would carry through to the connection string.
+            url = head.rstrip("?&")
+    return url
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -321,6 +369,15 @@ class Settings(BaseSettings):
                 "Neon requires TLS."
             )
         return v
+
+    @property
+    def async_database_url(self) -> str:
+        """`DATABASE_URL` in the dialect asyncpg speaks.
+
+        Every query in this application is async, so this — not
+        `database_url` — is what an engine should be built from.
+        """
+        return async_database_url(self.database_url)
 
     @property
     def is_production(self) -> bool:

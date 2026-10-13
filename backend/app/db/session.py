@@ -34,7 +34,10 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 def _build_engine() -> AsyncEngine:
     settings = get_settings()
     return create_async_engine(
-        settings.database_url,
+        # `settings.async_database_url`, not `settings.database_url`: the
+        # documented value is a libpq string, and handing it to asyncpg either
+        # builds a synchronous engine or raises on `sslmode` (Phase 25).
+        settings.async_database_url,
         pool_size=settings.database_pool_size,
         max_overflow=settings.database_max_overflow,
         echo=settings.database_echo,

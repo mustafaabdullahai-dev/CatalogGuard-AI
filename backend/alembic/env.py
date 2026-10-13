@@ -14,7 +14,7 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
-from app.core.config import get_settings_or_none
+from app.core.config import async_database_url, get_settings_or_none
 from app.db.base import Base
 from app.models import *  # noqa: F403 - registers all tables on Base.metadata
 
@@ -83,12 +83,10 @@ def get_url() -> str:
             "DATABASE_URL must set sslmode=require for an online migration."
         )
 
-    # Alembic's async engine requires the asyncpg driver scheme.
-    if url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    elif url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
-    return url
+    # Alembic's async engine needs asyncpg's dialect, and so does the
+    # application's engine — one translator, so the two cannot disagree about
+    # what a `DATABASE_URL` means (Phase 25).
+    return async_database_url(url)
 
 
 def run_migrations_offline() -> None:

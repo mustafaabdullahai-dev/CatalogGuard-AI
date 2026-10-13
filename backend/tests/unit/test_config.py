@@ -13,7 +13,7 @@ import pytest
 from cryptography.fernet import Fernet
 from pydantic import ValidationError
 
-from app.core.config import Settings
+from app.core.config import Settings, async_database_url
 
 # Generated test-only key. Never used outside the test suite.
 TEST_FERNET_KEY = Fernet.generate_key().decode()
@@ -135,3 +135,63 @@ class TestRiskDefaults:
     def test_no_langsmith_key_is_modelled(self) -> None:
         """D-007 prohibits third-party observability."""
         assert not any("langsmith" in f for f in Settings.model_fields)
+
+class TestAsyncDatabaseUrl:
+    """The dialect asyncpg speaks, translated from the one we document.
+
+    Every query in this application is async. `DATABASE_URL` is validated,
+    documented and stored in libpq's dialect because that is what Neon
+    documents and what a `psql` session can use — and handing that string
+    straight to an async engine builds a *synchronous* psycopg engine, which
+    fails on the first connect. Phase 25 found it by running the documented
+    value against a real server; nothing else could, because every test
+    either passed an already-translated URL or replaced the session
+    dependency.
+    """
+
+    def test_the_scheme_names_the_async_driver(self) -> None:
+        assert (
+            async_database_url("postgresql://u:p@host/db?sslmode=require")
+            == "postgresql+asyncpg://u:p@host/db?ssl=require"
+        )
+
+    def test_the_short_scheme_is_rewritten_too(self) -> None:
+        assert async_database_url("postgres://u:p@host/db?sslmode=require").startswith(
+            "postgresql+asyncpg://"
+        )
+
+    @pytest.mark.parametrize(
+        "mode", ["disable", "prefer", "require", "verify-ca", "verify-full"]
+    )
+    def test_every_sslmode_asyncpg_understands_is_translated(self, mode: str) -> None:
+        assert f"ssl={mode}" in async_database_url(f"postgresql://u:p@h/db?sslmode={mode}")
+
+    def test_other_query_parameters_survive(self) -> None:
+        translated = async_database_url(
+            "postgresql://u:p@host/db?sslmode=require&application_name=cg"
+        )
+
+        assert translated == "postgresql+asyncpg://u:p@host/db?ssl=require&application_name=cg"
+
+    def test_sslmode_allow_is_dropped_rather_than_guessed(self) -> None:
+        """asyncpg has no `allow`, and assuming TLS is not ours to assume."""
+
+        assert async_database_url("postgresql://u:p@h/db?sslmode=allow") == (
+            "postgresql+asyncpg://u:p@h/db"
+        )
+
+    def test_a_url_without_sslmode_is_left_alone(self) -> None:
+        assert async_database_url("postgresql://u:p@h/db") == "postgresql+asyncpg://u:p@h/db"
+
+    def test_settings_exposes_the_translated_url(self) -> None:
+        """The property an engine is built from, not the raw setting."""
+
+        settings = Settings(
+            DATABASE_URL="postgresql://u:p@host/db?sslmode=require",
+            QROQ_API_KEY="x" * 8,
+            ENCRYPTION_KEY="k56RU-1GjWszzDdaaTRbNKnrgc3yq-ph8dHk_eVVLPg=",
+        )
+
+        assert settings.async_database_url == "postgresql+asyncpg://u:p@host/db?ssl=require"
+        # The stored value keeps the documented spelling.
+        assert settings.database_url == "postgresql://u:p@host/db?sslmode=require"

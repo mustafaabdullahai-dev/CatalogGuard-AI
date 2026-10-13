@@ -331,6 +331,12 @@ def generate() -> str:
         "",
         "from alembic import op",
         "",
+        # The free-form JSON columns render as `app.db.types.JSONValue()`, the
+        # wrapper that lets a `Decimal` from the domain reach a JSON column
+        # (Phase 25). Imported like the RLS helpers are: this migration already
+        # describes behaviour rather than only shape.
+        "import app.db.types  # noqa: F401",
+        "",
         "from app.db.base import Base",
         "from app.db.rls import (",
         "    GLOBAL_TABLES,",
