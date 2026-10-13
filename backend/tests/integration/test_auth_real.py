@@ -303,3 +303,34 @@ class TestSignInAgainstARealDatabase:
             assert (await replay.get(f"{PREFIX}/auth/me")).status_code == 401
         finally:
             await replay.aclose()
+
+    async def test_a_user_with_two_sessions_still_authenticates(
+        self, api: httpx.AsyncClient, csrf_token: dict[str, str], engine: Any
+    ) -> None:
+        """Signing in twice must not break the account.
+
+        `get_auth_context` joined `auth_sessions` onto a lookup already
+        constrained to the session's own user, so a second session matched the
+        row twice and `scalar_one_or_none` raised `MultipleResultsFound` —
+        every authenticated request answered 500. Phase 25 found this by
+        signing in twice in one browser and watching the console break.
+        """
+        seeded = await _seed(engine)
+        for _ in range(2):
+            response = await api.post(
+                f"{PREFIX}/auth/login",
+                json={"email": seeded["email"], "password": PASSWORD},
+                headers=csrf_token,
+            )
+            assert response.status_code == 200, response.text
+
+        async with engine.connect() as connection:
+            sessions = (
+                await connection.execute(text("SELECT count(*) FROM auth_sessions"))
+            ).scalar_one()
+        assert sessions == 2, "both sign-ins should have created a session row"
+
+        me = await api.get(f"{PREFIX}/auth/me")
+
+        assert me.status_code == 200, me.text
+        assert me.json()["user"]["email"] == seeded["email"]

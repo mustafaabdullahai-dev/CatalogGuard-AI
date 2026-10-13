@@ -27,17 +27,32 @@ import { cookies } from "next/headers";
 
 import * as fixtures from "./fixtures";
 import type {
+  ApprovalQueueItem,
   ApprovalQueuePage,
   CatalogSourcePage,
+  ChangeProposalRef,
   ComplianceDocumentPage,
+  ComplianceDocumentRef,
   ComplianceSearchResponse,
   ConflictPage,
+  ConflictRef,
   CurrentSession,
   ProductPage,
+  ProductRef,
   ProposalPage,
   ReconciliationRunPage,
+  ReconciliationRunRef,
   SessionWorkspace,
 } from "./types";
+import {
+  conflictsPage,
+  documentsPage,
+  productsPage,
+  proposalsPage,
+  runsPage,
+  sourcesPage,
+  toPage,
+} from "./normalize";
 import { reasonNotice } from "./notices";
 
 const BASE = process.env.CATALOGGUARD_API_URL ?? "http://127.0.0.1:8000";
@@ -149,12 +164,20 @@ export async function pageContext(): Promise<PageContext> {
   return { workspaces: session.workspaces, workspace, live: true, reason: null };
 }
 
-/** Read a tenant-scoped endpoint, falling back to fixtures with a stated reason. */
+/**
+ * Read a tenant-scoped endpoint, falling back to fixtures with a stated reason.
+ *
+ * `normalise` is where the API's response becomes the console's model. It is a
+ * required argument on purpose: the cast this replaces — `as T` on a raw
+ * response — is what let an envelope the API never sends survive two phases,
+ * and a default would put that back.
+ */
 async function load<T>(
   context: PageContext,
   path: string,
   fallback: T,
   build: (workspaceId: string) => Promise<Response>,
+  normalise: (payload: unknown) => T,
 ): Promise<Loaded<T>> {
   if (!context.live || !context.workspace) {
     return { data: fallback, source: "fixture", reason: context.reason };
@@ -171,7 +194,7 @@ async function load<T>(
   if (!response.ok) {
     return { data: fallback, source: "fixture", reason: "server-error" };
   }
-  return { data: (await response.json()) as T, source: "live", reason: null };
+  return { data: normalise(await response.json()), source: "live", reason: null };
 }
 
 function query(params: Record<string, string | number | boolean | undefined | null>): string {
@@ -197,6 +220,7 @@ export async function getProducts(
     `/products${query({ limit, offset })}`,
     fixtures.products(limit, offset),
     (workspace) => raw(`/products${query({ limit, offset })}`, { workspace }),
+    (payload) => productsPage<ProductRef>(payload, { limit, offset }, "products") as ProductPage,
   );
 }
 
@@ -217,6 +241,7 @@ export async function getConflicts(
     path,
     fixtures.conflicts(limit, offset, params.productId),
     (workspace) => raw(path, { workspace }),
+    (payload) => conflictsPage<ConflictRef>(payload, { limit, offset }, "conflicts") as ConflictPage,
   );
 }
 
@@ -232,6 +257,7 @@ export async function getProposals(
     path,
     fixtures.proposals(limit, offset, params.riskLevel),
     (workspace) => raw(path, { workspace }),
+    (payload) => proposalsPage<ChangeProposalRef>(payload, { limit, offset }, "proposals") as ProposalPage,
   );
 }
 
@@ -247,24 +273,37 @@ export async function getApprovals(
     path,
     fixtures.approvals(limit, offset, params.riskLevel),
     (workspace) => raw(path, { workspace }),
+    (payload) => toPage<"items", ApprovalQueueItem>(payload, "items", { limit, offset }) as ApprovalQueuePage,
   );
 }
 
 export async function getSources(context: PageContext): Promise<Loaded<CatalogSourcePage>> {
-  return load(context, "/catalog-sources", fixtures.sources(), (workspace) =>
-    raw("/catalog-sources", { workspace }),
+  return load(
+    context,
+    "/catalog-sources",
+    fixtures.sources(),
+    (workspace) => raw("/catalog-sources", { workspace }),
+    (payload) => sourcesPage(payload, "sources") as CatalogSourcePage,
   );
 }
 
 export async function getRuns(context: PageContext): Promise<Loaded<ReconciliationRunPage>> {
-  return load(context, "/reconciliation-runs", fixtures.runs(), (workspace) =>
-    raw("/reconciliation-runs", { workspace }),
+  return load(
+    context,
+    "/reconciliation-runs",
+    fixtures.runs(),
+    (workspace) => raw("/reconciliation-runs", { workspace }),
+    (payload) => runsPage<ReconciliationRunRef>(payload, "runs") as ReconciliationRunPage,
   );
 }
 
 export async function getDocuments(context: PageContext): Promise<Loaded<ComplianceDocumentPage>> {
-  return load(context, "/compliance/documents", fixtures.documents(), (workspace) =>
-    raw("/compliance/documents", { workspace }),
+  return load(
+    context,
+    "/compliance/documents",
+    fixtures.documents(),
+    (workspace) => raw("/compliance/documents", { workspace }),
+    (payload) => documentsPage<ComplianceDocumentRef>(payload, "documents") as ComplianceDocumentPage,
   );
 }
 

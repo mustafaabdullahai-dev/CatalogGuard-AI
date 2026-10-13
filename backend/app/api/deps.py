@@ -109,11 +109,16 @@ async def get_auth_context(
     if record is None:
         raise _UNAUTHENTICATED
 
+    # No join to `auth_sessions`: the session is already resolved above, and
+    # the join was both redundant (`User.id == record.user_id` already implies
+    # a matching session) and multiplicative. A user with two sessions — anyone
+    # who has signed in twice, on two devices — matched twice and
+    # `scalar_one_or_none` raised `MultipleResultsFound`, so every authenticated
+    # request returned 500. Found in Phase 25, driving a real browser against a
+    # real database; the unit suite mocked this query and never saw it.
     result = await db.execute(
         select(User)
         .where(User.id == record.user_id)
-        .select_from(User)
-        .join(AuthSession, AuthSession.user_id == User.id)
         .where(User.is_active.is_(True), User.deleted_at.is_(None))
     )
     user = result.scalar_one_or_none()

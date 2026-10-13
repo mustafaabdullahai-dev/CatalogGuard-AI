@@ -292,6 +292,10 @@ a:hover {
   border: 1px solid rgb(var(--border));
   border-radius: 10px;
   box-shadow: var(--shadow-sm);
+  /* Same reason as `.stack > *`: a card holding a wide table must be allowed
+     to be narrower than its content, or the table scrolls the page instead of
+     scrolling inside `.table-wrap` (Phase 25). */
+  min-width: 0;
 }
 
 .card-header {
@@ -604,6 +608,15 @@ tbody tr:hover td {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* Phase 25: without this a flex item sizes to its content's max-content
+     width, so one wide table inside `.table-wrap` stretched the whole card
+     to 570px on a 390px screen and `overflow-x: auto` never engaged — the
+     page scrolled sideways instead of the table scrolling inside its box. */
+  min-width: 0;
+}
+
+.stack > * {
+  min-width: 0;
 }
 
 .agent-row {
