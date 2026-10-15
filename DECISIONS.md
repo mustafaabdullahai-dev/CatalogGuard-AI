@@ -1928,3 +1928,74 @@ the entire backend suite because the query that broke was mocked.
   is not part of `npm test`; wiring it into CI means the containers Phase 28
   will build.
 - The dev-mode hydration failure is recorded as observed, not diagnosed.
+
+---
+
+## D-028 — Security Testing: Attack the Boundary Over HTTP, and Audit What Has No Surface
+
+**Phase:** 26 — Security testing
+**Date:** 2026-10-15
+**Status:** Implemented
+
+### Decision
+
+- **The security suite attacks a running API.** `backend/tests/security/` holds
+  77 tests that start from what an attacker has — a session, a workspace id, an
+  id belonging to someone else — and assert the request is refused or that the
+  refusal leaks nothing. Calling a handler in-process proves nothing about
+  cookies, status codes, CSRF or timing.
+- **The API under test must use the database the suite manages**, because the
+  attacks name rows it writes. `CATALOGGUARD_SECURITY_API` names it; without a
+  reachable API the HTTP tests **skip with a reason** rather than passing
+  against nothing.
+- **RLS is asserted under the *owning* role.** Phase 24 proved policies apply
+  to a `NOSUPERUSER`. The application connects as the table owner, which
+  PostgreSQL exempts from its own policies unless `FORCE` is set — so a
+  migration that dropped `FORCE` would leave every earlier isolation test green
+  while disabling the control. The test reads `pg_class`, because a test that
+  read rows would pass on an empty table.
+- **§33 is audited item by item, and "no surface yet" is a recorded state.**
+  SSRF has no test that "proves" protection, because no request-driven URL
+  exists to abuse. Instead: no request schema carries a fetchable URL field, and
+  the only marketplace adapter is the mock. Both statements become false the day
+  a live connector lands, and the test says so. OAuth and webhook validation are
+  recorded the same way.
+- **Validation errors do not echo the submitted value.** FastAPI's default 422
+  body includes `input`, so a hostile email address came back inside the error
+  document. The handler keeps `type`, `loc` and `msg` and drops the value.
+- **Two deliberate decisions were tested as written rather than "fixed":** a
+  lockout answers 401 like every other failure (one exception, so it cannot
+  become an account-existence oracle), and a source's status is derived from the
+  record count rather than invented. The `Retry-After` question the first one
+  raises is recorded for the owner rather than decided here.
+
+### Reason
+
+The stub's exit criteria said the controls exist and that what is missing is
+trying to break them. That was right, and trying found three things testing had
+missed: a reflected-input vector in every 422, a regression-shaped weakness in
+how the RLS guarantee was asserted, and a harness that could pass while testing
+nothing.
+
+### Alternatives rejected
+
+- **A scanner (bandit, semgrep) as the deliverable.** It reports on code rather
+  than behaviour, adds a dependency, and cannot sign in, cannot forge a session,
+  and cannot attempt a cross-tenant write. It complements this suite; it does not
+  replace it.
+- **Fixing the lockout to return 429 with `Retry-After`.** Defensible in
+  isolation, but §65 forbids overriding a decision silently, and D-014's
+  single-exception design is the reason the lockout cannot be used to confirm an
+  account exists. Recorded as a question instead.
+- **Stripping injected text at ingestion.** A reviewer needs to see what the
+  supplier actually sent, and detection belongs where the text is used. The
+  corpus is stored verbatim and asserted inert downstream.
+
+### Gaps
+
+- Credential rotation (Qroq, Neon, Upstash) cannot be performed from this
+  repository and remains a blocker.
+- The suite is not a CI gate: it needs a running API, which Phase 28's
+  containers will provide.
+- Per-process rate limits mean the effective limit multiplies with the worker
+  count (D-024).

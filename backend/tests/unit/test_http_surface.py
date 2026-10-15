@@ -17,6 +17,7 @@ from pathlib import Path
 import httpx
 import pytest
 from httpx import ASGITransport
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.main import app
 
@@ -88,14 +89,39 @@ class TestHealth:
         assert "checks" not in body
 
     async def test_readiness_reports_the_probe_result_without_raising(
-        self, client: httpx.AsyncClient
+        self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """`DATABASE_URL` points at an unroutable host, so the probe fails.
+        """An unreachable database still answers 200 with the failure described.
 
-        It must still answer 200 with the failure described. A probe that raises
-        turns a dependency outage into a 500 the caller cannot interpret.
+        The precondition is set here rather than inherited: the suite's
+        conftest points `DATABASE_URL` at an unroutable host, but that is a
+        *default*, and running the whole suite against a real database — which
+        Phase 26 does — replaced it. A test that depends on ambient environment
+        passes in one run and fails in another for reasons that have nothing to
+        do with the code. A probe that raises would turn a dependency outage
+        into a 500 the caller cannot interpret.
         """
-        response = await client.get("/ready")
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        from app.db import session as session_module
+
+        # The engine, not the settings. `create_app()` runs at import time and
+        # captured a `Settings` instance then, so patching a freshly-built one
+        # leaves the running app untouched — and the suite's other suites change
+        # the environment this test depends on.
+        unreachable = create_async_engine(
+            "postgresql+asyncpg://test:test@postgres.invalid:5432/none?ssl=disable"
+        )
+        monkeypatch.setattr(session_module, "get_engine", lambda: unreachable)
+        monkeypatch.setattr(
+            session_module,
+            "get_session_factory",
+            lambda: async_sessionmaker(unreachable, expire_on_commit=False),
+        )
+        try:
+            response = await client.get("/ready")
+        finally:
+            await unreachable.dispose()
         assert response.status_code == 200
         body = response.json()
         assert body["status"] == "unavailable"

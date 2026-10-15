@@ -29,11 +29,11 @@ decision written to an immutable audit row (§20, §38, §39) — are complete a
 tested, as is the execution engine that carries an approved change to a
 marketplace, reads it back to prove it landed, and rolls it back when it did
 not (§21, §51), with a `tool_calls` record of every tool invocation (§23) —
-all of it **1172 backend tests** (1169 passed, 3 opt-in live-provider tests
+all of it **1249 backend tests** (1246 passed, 3 opt-in live-provider tests
 skipped) — **43 of them against a real PostgreSQL 16.15 with pgvector 0.8.6**
-(D-026) — a **93-test frontend suite**, and a **Chrome DevTools run against the
-real API** (D-027): six screens console-clean, 0 failures, CLS 0, session
-cookie-only.
+(D-026) and **77 of them attacking a running API** (D-028) — a **93-test
+frontend suite**, and a **Chrome DevTools run against the real API** (D-027):
+six screens console-clean, 0 failures, CLS 0, session cookie-only.
 The marketplace seam those writes go through exists too: one interface, one
 mock adapter, credentials encrypted at rest (§22, §33, D-005), with every live
 integration still deferred.
@@ -118,6 +118,7 @@ Every phase's delivery, gates and gaps are recorded in
 | Agent failure modes: prompt injection, incomplete data, hallucination resistance (§40) | **16 tests**; the framing is asserted, a live model's obedience is not |
 | CI: ruff, mypy, both suites, migration parity, frontend gates | `.github/workflows/ci.yml`, every push |
 | Browser validation: §41's five checks over four flows, against the real API (D-027) | `npm run validate:browser`; dependency-free CDP harness, no Playwright. Not yet a CI gate — it needs a running stack (Phase 28) |
+| Security testing: cross-tenant, CSRF, enumeration, throttling, revocation, §34 injection corpus (D-028) | **77 tests against a running API and a real database**; found one reflected-input defect in every 422. **Credential rotation still not done** — external |
 | Redis (Upstash) | **Verified live** — Redis 8.4.0, TLS required |
 | LLM (Qroq) | **Wired and live-verified** — fast (`openai/gpt-oss-20b`) and reasoning (`openai/gpt-oss-120b`) confirmed against the endpoint; key still needs rotation |
 | Agent graph (§7 roles, §24 state, D-007 validation layer) | Implemented, 12 unit tests + 2 opt-in live tests |
@@ -215,9 +216,10 @@ Swagger UI at `http://localhost:3000/docs` when the frontend proxies, or
 ### Tests and lint
 
 ```bash
-python -m pytest -q                   # 1169 passed, 3 skipped
+python -m pytest -q                   # 1183 passed, 66 skipped (security needs an API)
 python -m pytest -m "not integration" # 1126 passed — no database, no Docker
 python -m pytest -m integration tests/integration   # 43 passed, needs Docker or a URL
+python -m pytest tests/security       # 77 passed, needs a running API (see the suite docstring)
 cd frontend && npm test               # 93 vitest tests (modules, fixtures, API normalisation, write client)
 cd frontend && npm run validate:browser  # §41 against a running stack: Chrome over CDP, no dependency
 CATALOGGUARD_LIVE_LLM=1 python -m pytest tests/agent -q   # opt-in: 3 live LLM calls (2 schemas + 1 tool call)

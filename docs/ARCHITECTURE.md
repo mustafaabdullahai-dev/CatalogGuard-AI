@@ -668,6 +668,8 @@ Chrome ──CDP over WebSocket──► frontend/tests/browser/validate.mjs
 tests/unit          no database, fast, the default shape of the codebase
 tests/agent         graph, tools, injection, incomplete data, hallucinations
 tests/integration   real pgvector 0.8.6 in a container, or a URL you supply
+tests/security      attacks a running API: cross-tenant, CSRF, enumeration,
+                    throttling, revocation, §34 injection corpus (Phase 26)
 frontend/browser    §41's five checks over CDP (Phase 25, D-027)
 tests/e2e           still empty — it needs a running stack; Phase 28
 ```
@@ -693,6 +695,35 @@ tests/e2e           still empty — it needs a running stack; Phase 28
   cheap enough to run on every push.
 - **CI runs the gates on every push**, including a parity check that regenerates
   the migration and fails if it differs.
+
+---
+
+## Security posture (D-028, Phase 26)
+
+§33 lists sixteen controls. Three of them — OAuth, webhook validation and SSRF
+protection — have **no surface yet**, and saying so is the point: the feature
+that would need them is not built. The suite asserts the absence structurally
+(no request schema carries a fetchable URL field; the only marketplace adapter
+is the mock), so the statement becomes false — and the test fails — the day a
+live connector lands.
+
+```
+session cookie ─► HttpOnly, Secure, SameSite=Lax
+                    │
+                    ├─► every tenant route 401s without it
+                    ├─► revocation is a deleted row, effective immediately
+                    └─► a lockout stops the correct password too
+
+writes ─► signed double-submit CSRF, refused if missing, forged, or
+          minted for another session
+
+422s ──► type, loc, msg — never the submitted value
+          (Phase 26: FastAPI's default handler echoed it, script markup
+           included)
+
+rows   ─► RLS FORCED, so the table's own owner is subject to it
+          (Phase 24 proved a NOSUPERUSER is; Phase 26 proved the owner)
+```
 
 ---
 
