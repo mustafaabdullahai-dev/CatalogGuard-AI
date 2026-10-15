@@ -95,4 +95,5 @@ markers = [
     "e2e: full workflow test",
     "live_llm: calls a live LLM provider (opt-in via CATALOGGUARD_LIVE_LLM=1)",
     "slow: long-running",
+    "performance: measures statements, plans and latency (Phase 27, needs a database)",
 ]

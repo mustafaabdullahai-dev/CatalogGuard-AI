@@ -40,6 +40,20 @@ _HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(\S.*)$")
 _SECTION_RE = re.compile(
     r"^\s*(?:section|§)\s+([0-9]+(?:\.[0-9]+)*)\s*[.:]?\s*(.*)$", re.I
 )
+# A section heading carries a *title*, and the regex above will happily swallow
+# an entire sentence as one:
+# "Section 3. A textile product must carry a fibre content label." parses as
+# heading "Section 3 A textile product must carry a fibre content label."
+# A document consisting of one such line then produced no chunks at all, and
+# ingestion refused a legitimate single-sentence rule — found in Phase 27 by
+# profiling with realistic policy content rather than the tidy fixtures the
+# unit tests use.
+#
+# A title is short and does not end like a sentence. Both are checked: a length
+# cap alone rejects a long heading, and terminal punctuation alone rejects a
+# title like "Safety requirements." that happens to end in a full stop.
+_TITLE_MAX_WORDS = 8
+_SENTENCE_END = (".", "!", "?")
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
@@ -77,6 +91,14 @@ def _parse_heading(line: str) -> str | None:
         return match.group(2).strip()
     if match := _SECTION_RE.match(line):
         number, title = match.group(1), match.group(2).strip()
+        words = title.split()
+        looks_like_a_sentence = len(words) > _TITLE_MAX_WORDS or (
+            title.endswith(_SENTENCE_END) and len(words) > 3
+        )
+        if looks_like_a_sentence:
+            # A numbered sentence in body text, not a heading. Treated as
+            # content, which is what it is.
+            return None
         return f"Section {number} {title}".strip()
     return None
 
