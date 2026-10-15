@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "validate:browser": "node tests/browser/validate.mjs"
+    "validate:browser": "node tests/browser/validate.mjs",
+    "metrics:browser": "node tests/browser/metrics.mjs"
   },
   "dependencies": {
     "next": "16.3.8",

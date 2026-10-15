@@ -1999,3 +1999,69 @@ nothing.
   containers will provide.
 - Per-process rate limits mean the effective limit multiplies with the worker
   count (D-024).
+
+---
+
+## D-029 — Performance Measurement: Assert the Shape, Record the Numbers
+
+**Phase:** 27 — Performance testing
+**Date:** 2026-10-17
+**Status:** Implemented
+
+### Decision
+
+- **Statement counts are an invariant across two scales, not a budget.** Every
+  hot path is counted at 25 rows and at 2,000, and the assertion is that the two
+  counts are *equal*. A per-row query cannot hide at 25 rows, and a number
+  compared against a budget invites the budget to be raised.
+- **Index usage is read from `EXPLAIN`, never from the schema.** At 5,000 rows
+  the planner's choice is the claim; an index definition is a hope. The vector
+  plan is EXPLAINed from the statement `vector_statement` builds, because an
+  index the application never queries earns nothing.
+- **Latency is measured and printed, and asserted against a generous budget.**
+  The numbers are the deliverable; the budgets exist so a regression fails as a
+  number rather than as a feeling. Budgets in milliseconds on one laptop measure
+  the laptop.
+- **Instruments are asserted against a known answer.** The statement counter must
+  be shown observing something; the plan parser must be shown reporting both
+  answers. Both instruments in this phase were wrong before the code was, and
+  both would have produced confident nonsense.
+- **Frontend metrics are recorded per route in a real browser**: rows rendered,
+  DOM nodes, LCP, CLS and browser API calls, with a full page of data behind
+  them.
+- **Virtualization was declined, with the measurement attached.** Pagination caps
+  a screen at 50 rows; the worst case measured is 1,781 DOM nodes. The decision
+  is stated with the number so it can be revisited when the cap changes, rather
+  than re-argued from memory.
+- **The §57 chunking defect was fixed at the parse, not the drop rule.** A
+  heading with no body is deliberately dropped; the bug was that the section
+  regex read a numbered *sentence* as a heading, so a one-line policy rule
+  produced no chunks and ingestion refused it.
+
+### Reason
+
+Every §57 rule in the codebase was a comment. Four said they were batched, the
+schema carried indexes, and retrieval was tuned — none of it executed at a size
+where the claim could fail. The first real profile of realistic content found a
+refused-input defect that no unit test could reach, because the unit fixtures
+are tidier than a supplier's data.
+
+### Alternatives rejected
+
+- **`locust` or `pytest-benchmark` as the deliverable.** They report on this
+  machine. Concurrency and pool behaviour under parallel load belong to a
+  deployment (Phase 28), where the numbers mean something.
+- **A tight latency budget per endpoint.** Tight budgets on shared CI hardware
+  produce a suite people disable, which is the opposite of a gate.
+- **Virtualizing every table.** A dependency and a scroll-position bug surface,
+  bought with a problem that pagination has already bounded.
+- **Asserting byte budgets per route.** Chunks are cached across navigations, so
+  per-route bytes understate a cold load; a weight budget belongs with the
+  deployment that serves it.
+
+### Gaps
+
+- No concurrency, saturation or pool-exhaustion testing.
+- Latency budgets are per-machine and deliberately loose.
+- `build_observations` re-normalizes every record per run by design; 0.2 ms per
+  product is measured, not optimized away.

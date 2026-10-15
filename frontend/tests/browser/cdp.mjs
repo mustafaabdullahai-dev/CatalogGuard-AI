@@ -175,16 +175,31 @@ export class Browser {
     });
     this.on("Network.responseReceived", (params) => {
       const request = this.#requests.get(params.requestId) ?? {};
-      this.recorder.responses.push({
+      const entry = {
         url: params.response.url,
         status: params.response.status,
         method: request.method,
         fromCache: params.response.fromDiskCache,
         type: params.type,
+        // Kept for size measurement: §58 asks what a page ships, and a chunk
+        // that exists in the build directory is not a chunk that was sent.
+        headers: params.response.headers ?? {},
+        encodedBytes: 0,
         requestId: params.requestId,
-      });
+      };
+      this.recorder.responses.push(entry);
+      this.#responsesById.set(params.requestId, entry);
     });
-    this.on("Network.loadingFinished", () => {
+    this.on("Network.loadingFinished", (params) => {
+      // `encodedDataLength` is the number of bytes that actually crossed the
+      // wire, compression included, and it arrives here rather than on the
+      // response event. The `content-length` header is frequently absent
+      // entirely under chunked transfer encoding, which made every route
+      // measure 0KB.
+      const recorded = this.#responsesById.get(params.requestId);
+      if (recorded) {
+        recorded.encodedBytes = params.encodedDataLength;
+      }
       // Keep the request map bounded: a long run would otherwise grow it for
       // the life of the browser.
       if (this.#requests.size > 500) {
@@ -194,6 +209,8 @@ export class Browser {
   }
 
   #requests = new Map();
+
+  #responsesById = new Map();
 
   on(event, handler) {
     this.listeners.add({ event, handler });

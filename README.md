@@ -29,7 +29,7 @@ decision written to an immutable audit row (§20, §38, §39) — are complete a
 tested, as is the execution engine that carries an approved change to a
 marketplace, reads it back to prove it landed, and rolls it back when it did
 not (§21, §51), with a `tool_calls` record of every tool invocation (§23) —
-all of it **1249 backend tests** (1246 passed, 3 opt-in live-provider tests
+all of it **1265 backend tests** (1262 passed, 3 opt-in live-provider tests
 skipped) — **43 of them against a real PostgreSQL 16.15 with pgvector 0.8.6**
 (D-026) and **77 of them attacking a running API** (D-028) — a **93-test
 frontend suite**, and a **Chrome DevTools run against the real API** (D-027):
@@ -119,6 +119,7 @@ Every phase's delivery, gates and gaps are recorded in
 | CI: ruff, mypy, both suites, migration parity, frontend gates | `.github/workflows/ci.yml`, every push |
 | Browser validation: §41's five checks over four flows, against the real API (D-027) | `npm run validate:browser`; dependency-free CDP harness, no Playwright. Not yet a CI gate — it needs a running stack (Phase 28) |
 | Security testing: cross-tenant, CSRF, enumeration, throttling, revocation, §34 injection corpus (D-028) | **77 tests against a running API and a real database**; found one reflected-input defect in every 422. **Credential rotation still not done** — external |
+| Performance: round trips asserted across two scales, indexes read from query plans, retrieval and reconciliation profiled at corpus scale (D-029) | **16 tests**; all four hot paths constant-cost at 25 and 2,000 rows, retrieval 25–58 ms over 400 documents, 500 products reconciled in 3.7 s. Found one chunking defect that refused a single-sentence policy rule |
 | Redis (Upstash) | **Verified live** — Redis 8.4.0, TLS required |
 | LLM (Qroq) | **Wired and live-verified** — fast (`openai/gpt-oss-20b`) and reasoning (`openai/gpt-oss-120b`) confirmed against the endpoint; key still needs rotation |
 | Agent graph (§7 roles, §24 state, D-007 validation layer) | Implemented, 12 unit tests + 2 opt-in live tests |
@@ -217,6 +218,8 @@ Swagger UI at `http://localhost:3000/docs` when the frontend proxies, or
 
 ```bash
 python -m pytest -q                   # 1183 passed, 66 skipped (security needs an API)
+python -m pytest -m performance       # 16 passed, needs a database (Phase 27)
+cd frontend && npm run metrics:browser # §58 per-route metrics in Chrome
 python -m pytest -m "not integration" # 1126 passed — no database, no Docker
 python -m pytest -m integration tests/integration   # 43 passed, needs Docker or a URL
 python -m pytest tests/security       # 77 passed, needs a running API (see the suite docstring)

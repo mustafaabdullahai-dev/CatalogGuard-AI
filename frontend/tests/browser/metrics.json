@@ -1,0 +1,138 @@
+{
+  "base_url": "http://127.0.0.1:3001",
+  "routes": [
+    {
+      "path": "/",
+      "requests": 32,
+      "api_requests": 0,
+      "api_failures": 0,
+      "bytes": {
+        "script": 4668,
+        "stylesheet": 0,
+        "document": 7621,
+        "other": 2225,
+        "count": 32
+      },
+      "rows": 7,
+      "dom_nodes": 294,
+      "broken_images": 0,
+      "lcp_ms": 288,
+      "cls": 0,
+      "layout_ms": 0.004722,
+      "script_ms": 0.013453,
+      "heap_mb": 5.4
+    },
+    {
+      "path": "/catalog",
+      "requests": 20,
+      "api_requests": 0,
+      "api_failures": 0,
+      "bytes": {
+        "script": 0,
+        "stylesheet": 0,
+        "document": 8777,
+        "other": 1235,
+        "count": 20
+      },
+      "rows": 50,
+      "dom_nodes": 650,
+      "broken_images": 0,
+      "lcp_ms": 148,
+      "cls": 0,
+      "layout_ms": 0.014775,
+      "script_ms": 0.022309,
+      "heap_mb": 6.2
+    },
+    {
+      "path": "/reconciliation",
+      "requests": 20,
+      "api_requests": 0,
+      "api_failures": 0,
+      "bytes": {
+        "script": 0,
+        "stylesheet": 0,
+        "document": 6643,
+        "other": 245,
+        "count": 20
+      },
+      "rows": 1,
+      "dom_nodes": 463,
+      "broken_images": 0,
+      "lcp_ms": 204,
+      "cls": 0,
+      "layout_ms": 0.00988,
+      "script_ms": 0.019113,
+      "heap_mb": 7.2
+    },
+    {
+      "path": "/approvals",
+      "requests": 20,
+      "api_requests": 0,
+      "api_failures": 0,
+      "bytes": {
+        "script": 10020,
+        "stylesheet": 0,
+        "document": 10348,
+        "other": 245,
+        "count": 20
+      },
+      "rows": 50,
+      "dom_nodes": 1781,
+      "broken_images": 0,
+      "lcp_ms": 176,
+      "cls": 0,
+      "layout_ms": 0.026852,
+      "script_ms": 0.026535,
+      "heap_mb": 9.8
+    },
+    {
+      "path": "/sandbox",
+      "requests": 20,
+      "api_requests": 0,
+      "api_failures": 0,
+      "bytes": {
+        "script": 8498,
+        "stylesheet": 0,
+        "document": 8893,
+        "other": 1234,
+        "count": 20
+      },
+      "rows": 0,
+      "dom_nodes": 129,
+      "broken_images": 0,
+      "lcp_ms": 116,
+      "cls": 0,
+      "layout_ms": 0.00221,
+      "script_ms": 0.019754,
+      "heap_mb": 9.7
+    },
+    {
+      "path": "/compliance",
+      "requests": 20,
+      "api_requests": 0,
+      "api_failures": 0,
+      "bytes": {
+        "script": 7390,
+        "stylesheet": 0,
+        "document": 4946,
+        "other": 245,
+        "count": 20
+      },
+      "rows": 2,
+      "dom_nodes": 99,
+      "broken_images": 0,
+      "lcp_ms": 120,
+      "cls": 0,
+      "layout_ms": 0.002655,
+      "script_ms": 0.036324,
+      "heap_mb": 11.1
+    }
+  ],
+  "totals": {
+    "max_dom_nodes": 1781,
+    "max_rows": 50,
+    "max_lcp_ms": 288,
+    "max_cls": 0,
+    "api_failures": 0
+  }
+}
