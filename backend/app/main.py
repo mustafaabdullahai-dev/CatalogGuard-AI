@@ -5,10 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.v1 import (
@@ -139,6 +140,7 @@ def create_app() -> FastAPI:
         }
 
     _install_openapi_security(app, settings)
+    _install_validation_handler(app)
     return app
 
 
@@ -165,6 +167,41 @@ def _public_operations(prefix: str) -> frozenset[tuple[str, str]]:
 
 
 HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
+
+
+def _install_validation_handler(app: FastAPI) -> None:
+    """Answer a validation failure without echoing what was submitted.
+
+    FastAPI's default 422 body includes the offending `input` verbatim, so
+    posting `<script>alert(1)</script>` as an email address returns that script
+    inside the error document. Nothing in this project renders an error body as
+    HTML today, but a reflected-input vector that costs one handler to remove is
+    not worth carrying into a deployment where something else might render it
+    (Phase 26).
+
+    What survives is the part a caller actually needs to fix their request: where
+    the error was, what rule it broke, and the message. The value goes; the
+    diagnosis stays.
+    """
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error(
+        request: Request,  # noqa: ARG001 - the handler signature requires it
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        errors = [
+            {
+                "type": error.get("type", "validation_error"),
+                "loc": [str(part) for part in error.get("loc", ())],
+                "msg": error.get("msg", "invalid value"),
+            }
+            for error in exc.errors()
+        ]
+        return JSONResponse(
+            status_code=422,
+            content={"detail": errors},
+            headers={"WWW-Authenticate": "Cookie"},
+        )
 
 
 def _install_openapi_security(app: FastAPI, settings: Settings) -> None:
